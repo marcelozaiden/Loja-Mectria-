@@ -156,7 +156,7 @@ const ImageAdjuster: React.FC<{
 };
 
 const FeedbackToast: React.FC<{ order: Order; onClose: () => void }> = ({ order, onClose }) => (
-  <div className="fixed top-8 left-1/2 -translate-x-1/2 w-[90%] max-w-sm z-[150] bg-white rounded-3xl shadow-2xl border border-slate-100 p-5 flex items-center gap-4 animate-in slide-in-from-top-full duration-500">
+  <div className="fixed top-8 left-1/2 -translate-x-1/2 w-[90%] max-sm z-[150] bg-white rounded-3xl shadow-2xl border border-slate-100 p-5 flex items-center gap-4 animate-in slide-in-from-top-full duration-500">
     <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${order.status === OrderStatus.DELIVERED ? 'bg-green-100 text-green-600' : 'bg-red-50 text-red-600'}`}>
       {order.status === OrderStatus.DELIVERED ? (
         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
@@ -227,7 +227,7 @@ const FileInput: React.FC<{
         }
       }} className="hidden" id={`file-${label.replace(/\s+/g, '-').toLowerCase()}`} />
       <label htmlFor={`file-${label.replace(/\s+/g, '-').toLowerCase()}`} className="flex flex-col items-center justify-center gap-2 px-4 py-6 rounded-[2rem] border-2 border-dashed border-slate-200 hover:border-mectria-red cursor-pointer text-xs font-bold text-slate-400 bg-slate-50/50 transition-all overflow-hidden">
-        {loading ? <span className="animate-pulse text-mectria-red">Aguarde...</span> : preview ? <img src={preview} className="w-full h-32 object-contain" /> : <span>Selecionar Imagem</span>}
+        {loading ? <span className="animate-pulse text-mectria-red">Aguarde...</span> : preview && preview.startsWith('data:image') ? <img src={preview} className="w-full h-32 object-contain" /> : <span>Selecionar Arquivo</span>}
       </label>
     </div>
   );
@@ -372,6 +372,7 @@ const AdminPanel: React.FC<{
   const [newMember, setNewMember] = useState({ name: '', email: '', clockifyId: '' });
   const [newProduct, setNewProduct] = useState({ name: '', price: 0, image: '' });
   const [balanceAdjustValue, setBalanceAdjustValue] = useState<number>(0);
+  const [importSummary, setImportSummary] = useState<{ count: number, totalTokens: number } | null>(null);
 
   return (
     <div className="p-6 pb-32 max-w-4xl mx-auto space-y-8">
@@ -385,31 +386,63 @@ const AdminPanel: React.FC<{
 
       {tab === 'clockify' && (
         <div className="bg-white p-12 rounded-[3.5rem] border shadow-sm text-center space-y-8">
-          <h4 className="font-black uppercase text-lg text-slate-800 tracking-tight">Importar Clockify</h4>
-          <FileInput label="Relatório PDF" accept="application/pdf,image/*" onChange={async (b, m) => { setLoading(true); await onImportFile(b, m); setLoading(false); }} />
-          {loading && <p className="text-[10px] font-black text-mectria-red animate-pulse">PROCESSANDO...</p>}
+          <div>
+            <h4 className="font-black uppercase text-lg text-slate-800 tracking-tight">Importar Clockify</h4>
+            <p className="text-[10px] font-bold text-slate-400 uppercase mt-2">Exporte o relatório resumido como CSV no Clockify</p>
+          </div>
+          
+          {!importSummary ? (
+            <FileInput label="Relatório CSV" accept=".csv" onChange={async (b, m) => { 
+              setLoading(true); 
+              await onImportFile(b, m); 
+              setLoading(false); 
+            }} />
+          ) : (
+            <div className="bg-green-50 p-6 rounded-3xl border border-green-100 animate-in zoom-in-95">
+              <div className="text-green-600 mb-2">
+                <svg className="w-10 h-10 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+              </div>
+              <p className="font-black text-[10px] uppercase tracking-widest text-green-700">Importação Concluída!</p>
+              <p className="text-sm font-bold text-green-600 mt-1">{importSummary.count} membros atualizados</p>
+              <Button onClick={() => setImportSummary(null)} variant="success" className="mt-4 px-8 text-[9px]">Nova Importação</Button>
+            </div>
+          )}
+          
+          {loading && <p className="text-[10px] font-black text-mectria-red animate-pulse">PROCESSANDO ARQUIVO...</p>}
+          <div className="pt-4 text-left p-6 bg-slate-50 rounded-2xl border border-dashed">
+             <h6 className="text-[9px] font-black uppercase text-slate-500 mb-2">Como funciona:</h6>
+             <ul className="text-[9px] font-bold text-slate-400 uppercase space-y-1">
+               <li>• O sistema lê a coluna "User" e "Duration"</li>
+               <li>• Multiplica horas totais por 0.4</li>
+               <li>• Soma o resultado ao saldo atual do membro</li>
+             </ul>
+          </div>
         </div>
       )}
 
       {tab === 'orders' && (
         <div className="space-y-4">
           <h4 className="font-black uppercase text-xs px-2 border-l-4 border-mectria-red">Pedidos Pendentes</h4>
-          {orders.filter(o => o.status === OrderStatus.PENDING).map(o => {
-            const m = members.find(u => u.id === o.userId);
-            return (
-              <div key={o.id} className="bg-white p-6 rounded-[2.5rem] border flex items-center gap-6 shadow-sm">
-                <img src={m?.avatar} className="w-14 h-14 rounded-2xl object-cover bg-slate-50" />
-                <div className="flex-1">
-                  <h5 className="font-black text-slate-800 text-sm uppercase">{m?.name}</h5>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase">{o.productName} • {o.price} TK</p>
+          {orders.filter(o => o.status === OrderStatus.PENDING).length === 0 ? (
+            <p className="text-center py-12 text-slate-300 font-black uppercase text-[10px] tracking-widest">Nenhum pedido pendente</p>
+          ) : (
+            orders.filter(o => o.status === OrderStatus.PENDING).map(o => {
+              const m = members.find(u => u.id === o.userId);
+              return (
+                <div key={o.id} className="bg-white p-6 rounded-[2.5rem] border flex items-center gap-6 shadow-sm">
+                  <img src={m?.avatar} className="w-14 h-14 rounded-2xl object-cover bg-slate-50" />
+                  <div className="flex-1">
+                    <h5 className="font-black text-slate-800 text-sm uppercase">{m?.name}</h5>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase">{o.productName} • {o.price} TK</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button onClick={() => onAction('approve_order', o)} variant="success" className="p-3"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg></Button>
+                    <Button onClick={() => onAction('reject_order', o)} variant="danger" className="p-3"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg></Button>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <Button onClick={() => onAction('approve_order', o)} variant="success" className="p-3"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg></Button>
-                  <Button onClick={() => onAction('reject_order', o)} variant="danger" className="p-3"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg></Button>
-                </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
       )}
 
@@ -649,11 +682,23 @@ const App: React.FC = () => {
                 onImportFile={async (b, m) => {
                   const data = await parseClockifyReport(b, m);
                   const batch = writeBatch(db);
+                  let count = 0;
                   data.forEach(entry => {
-                    const m = members.find(u => u.name.toLowerCase().includes(entry.user.toLowerCase()) || u.clockifyId.toLowerCase() === entry.user.toLowerCase());
-                    if (m) batch.update(doc(db, "members", m.id), { balance: increment(entry.tokens) });
+                    // Tenta encontrar o membro pelo ID Clockify ou Nome exato
+                    const m = members.find(u => 
+                      u.clockifyId?.toLowerCase() === entry.user.toLowerCase() || 
+                      u.name.toLowerCase() === entry.user.toLowerCase() ||
+                      u.name.toLowerCase().includes(entry.user.toLowerCase())
+                    );
+                    
+                    if (m) {
+                      batch.update(doc(db, "members", m.id), { balance: increment(entry.tokens) });
+                      count++;
+                    }
                   });
                   await batch.commit();
+                  // Força um feedback visual
+                  alert(`Importação concluída: ${count} membros atualizados.`);
                 }} 
               />
             )}
