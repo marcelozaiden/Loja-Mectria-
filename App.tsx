@@ -1,11 +1,13 @@
+
 import React, { useState, useEffect } from 'react';
-import { User, Product, Order, Role, OrderStatus, SiteSettings } from './types';
+import { User, Product, Order, Role, OrderStatus, SiteSettings, ClockifyData } from './types';
 import { GearLogo, ADMIN_EMAIL, INITIAL_MEMBERS, INITIAL_PRODUCTS } from './constants';
 import { db } from './firebase';
 import { 
   collection, onSnapshot, doc, query, orderBy, writeBatch, 
   increment, getDocs, updateDoc, setDoc, deleteDoc 
 } from "firebase/firestore";
+import { parseClockifyReport } from './services/geminiService';
 
 // --- Componentes de UI ---
 const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, type = "button" }: any) => {
@@ -13,7 +15,8 @@ const Button = ({ children, onClick, variant = 'primary', className = '', disabl
     primary: "bg-[#8B0000] text-white hover:bg-red-800",
     outline: "border border-gray-300 text-gray-700 hover:bg-gray-50",
     danger: "bg-red-50 text-red-600 hover:bg-red-100",
-    success: "bg-green-600 text-white hover:bg-green-700"
+    success: "bg-green-600 text-white hover:bg-green-700",
+    info: "bg-blue-50 text-blue-600 hover:bg-blue-100"
   };
   return (
     <button 
@@ -61,6 +64,88 @@ const LegendaryEmbers = () => {
   );
 };
 
+const ImportModal = ({ isOpen, onClose, onImport, members }: { isOpen: boolean, onClose: () => void, onImport: (data: ClockifyData[]) => void, members: User[] }) => {
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [previewData, setPreviewData] = useState<ClockifyData[]>([]);
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsProcessing(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = reader.result as string;
+        const result = await parseClockifyReport(base64, file.type);
+        setPreviewData(result);
+        setIsProcessing(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      alert(err.message);
+      setIsProcessing(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+      <div className="bg-white rounded-[2.5rem] w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden animate-fade-in">
+        <div className="p-8 border-b flex justify-between items-center">
+          <h2 className="text-xl font-black uppercase">Importar Horas (Clockify)</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-black">✕</button>
+        </div>
+        <div className="p-8 overflow-y-auto flex-1">
+          {!previewData.length ? (
+            <div className="text-center py-12">
+              <label className={`cursor-pointer inline-block px-10 py-6 rounded-3xl border-2 border-dashed border-gray-200 hover:border-[#8B0000] transition-colors ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
+                {isProcessing ? (
+                  <div className="flex flex-col items-center gap-4">
+                    <div className="w-8 h-8 border-4 border-[#8B0000] border-t-transparent rounded-full animate-spin"></div>
+                    <p className="text-sm font-black text-gray-400 uppercase">A IA está processando o CSV...</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-4">
+                    <svg className="w-12 h-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                    <p className="text-sm font-black text-gray-400 uppercase">Selecionar Relatório CSV</p>
+                  </div>
+                )}
+                <input type="file" accept=".csv" className="hidden" onChange={handleFile} disabled={isProcessing} />
+              </label>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-xs font-bold text-gray-400 uppercase mb-4">Prévia da Conversão (Taxa 0.4 TK/h - Arredondado p/ Cima)</p>
+              {previewData.map((d, i) => {
+                const member = members.find(m => m.name.toLowerCase().includes(d.user.toLowerCase()));
+                return (
+                  <div key={i} className={`p-4 rounded-2xl flex items-center justify-between ${member ? 'bg-gray-50' : 'bg-red-50 opacity-60'}`}>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2 h-2 rounded-full ${member ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                      <div>
+                        <p className="text-sm font-black uppercase">{d.user}</p>
+                        <p className="text-[10px] font-bold text-gray-400">{d.duration} • {member ? 'Membro Identificado' : 'Não encontrado'}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-black text-[#8B0000]">{d.tokens} TK</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div className="p-8 border-t bg-gray-50 flex gap-4">
+          <Button variant="outline" className="flex-1" onClick={() => setPreviewData([])}>LIMPAR</Button>
+          <Button className="flex-1" disabled={!previewData.length || isProcessing} onClick={() => onImport(previewData)}>CONFIRMAR E CREDITAR</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [members, setMembers] = useState<User[]>([]);
@@ -77,10 +162,10 @@ export default function App() {
   const [newMemberEmail, setNewMemberEmail] = useState('');
 
   const [isAddingProduct, setIsAddingProduct] = useState(false);
-  const [newProductName, setNewProductName] = useState('');
-  const [newProductPrice, setNewProductPrice] = useState('');
-  const [newProductImage, setNewProductImage] = useState('');
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [productForm, setProductForm] = useState({ name: '', price: '', image: '' });
 
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [adjAmounts, setAdjAmounts] = useState<{[key: string]: string}>({});
 
   useEffect(() => {
@@ -121,7 +206,9 @@ export default function App() {
   }, [user?.id]);
 
   const handleBuy = async (p: Product) => {
-    if (!user || user.balance < p.price) return;
+    // Garante que o saldo seja tratado como inteiro para segurança
+    const userBalance = Math.floor(user?.balance || 0);
+    if (!user || userBalance < p.price) return;
     try {
       const batch = writeBatch(db);
       const orderRef = doc(collection(db, "orders"));
@@ -137,6 +224,10 @@ export default function App() {
   };
 
   const handleUpdateUser = async (uId: string, data: Partial<User>) => {
+    // Se o balanço for atualizado, garantimos que seja inteiro
+    if (data.balance !== undefined) {
+      data.balance = Math.ceil(data.balance);
+    }
     await updateDoc(doc(db, "members", uId), data);
   };
 
@@ -159,19 +250,60 @@ export default function App() {
     } catch (err: any) { alert("Erro: " + err.message); }
   };
 
-  const handleAddProduct = async (e: React.FormEvent) => {
+  const handleProductSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newProductName || !newProductPrice || !newProductImage) return;
+    const { name, price, image } = productForm;
+    if (!name || !price || !image) {
+      alert("Preencha todos os campos e selecione uma imagem.");
+      return;
+    }
+    
     try {
-      const id = `p${Date.now()}`;
-      const newProduct: Product = {
-        id, name: newProductName, price: Number(newProductPrice), image: newProductImage
-      };
-      await setDoc(doc(db, "products", id), newProduct);
-      setIsAddingProduct(false);
-      setNewProductName(''); setNewProductPrice(''); setNewProductImage('');
-      alert("Produto adicionado!");
+      const finalPrice = Math.ceil(Number(price));
+      if (editingProduct) {
+        await updateDoc(doc(db, "products", editingProduct.id), {
+          name, price: finalPrice, image
+        });
+        alert("Produto atualizado!");
+        setEditingProduct(null);
+      } else {
+        const id = `p${Date.now()}`;
+        await setDoc(doc(db, "products", id), {
+          id, name, price: finalPrice, image
+        });
+        alert("Produto adicionado!");
+        setIsAddingProduct(false);
+      }
+      setProductForm({ name: '', price: '', image: '' });
     } catch (err: any) { alert("Erro: " + err.message); }
+  };
+
+  const handleImportClockify = async (data: ClockifyData[]) => {
+    try {
+      const batch = writeBatch(db);
+      let count = 0;
+      data.forEach(d => {
+        const member = members.find(m => m.name.toLowerCase().includes(d.user.toLowerCase()));
+        if (member) {
+          // Os tokens da IA já devem vir inteiros, mas garantimos aqui novamente
+          const tokensToAdd = Math.ceil(d.tokens);
+          batch.update(doc(db, "members", member.id), { balance: increment(tokensToAdd) });
+          count++;
+        }
+      });
+      await batch.commit();
+      setIsImportModalOpen(false);
+      alert(`${count} membros receberam créditos com sucesso!`);
+    } catch (err: any) {
+      alert("Erro ao aplicar créditos: " + err.message);
+    }
+  };
+
+  const startEditingProduct = (p: Product) => {
+    setEditingProduct(p);
+    setProductForm({ name: p.name, price: String(p.price), image: p.image });
+    setIsAddingProduct(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleDeleteProduct = async (id: string) => {
@@ -249,7 +381,7 @@ export default function App() {
                <div className="bg-white/10 backdrop-blur-md rounded-[2.5rem] p-10 flex flex-col items-center justify-center border border-white/10 z-10 min-w-[240px] shadow-inner text-center">
                  <span className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-2">Seus Tokens</span>
                  <div className="flex items-center gap-3">
-                   <span className="text-6xl font-black tabular-nums">{user.balance}</span>
+                   <span className="text-6xl font-black tabular-nums">{Math.floor(user.balance)}</span>
                    <span className="text-sm font-bold opacity-80">TK</span>
                  </div>
                </div>
@@ -270,7 +402,7 @@ export default function App() {
                     <h3 className="text-sm font-black text-gray-800 line-clamp-1 uppercase">{p.name}</h3>
                     <p className="text-xs text-[#8B0000] font-black mt-1">● {p.price} tokens</p>
                   </div>
-                  <Button onClick={() => handleBuy(p)} disabled={user.balance < p.price} className="w-full mt-auto py-3">RESGATAR</Button>
+                  <Button onClick={() => handleBuy(p)} disabled={Math.floor(user.balance) < p.price} className="w-full mt-auto py-3">RESGATAR</Button>
                 </div>
               ))}
             </div>
@@ -294,7 +426,7 @@ export default function App() {
                <div className={`mt-10 p-10 rounded-3xl flex items-center justify-between z-10 relative ${isMemberOfMonth ? 'bg-white/10' : 'bg-gray-50'}`}>
                   <div className="text-left">
                     <p className={`text-[10px] font-black uppercase ${isMemberOfMonth ? 'text-white/50' : 'text-gray-400'}`}>Saldo Atual</p>
-                    <p className={`text-4xl font-black ${isMemberOfMonth ? 'text-white' : 'text-gray-800'}`}>{user.balance} <span className="text-sm">TK</span></p>
+                    <p className={`text-4xl font-black ${isMemberOfMonth ? 'text-white' : 'text-gray-800'}`}>{Math.floor(user.balance)} <span className="text-sm">TK</span></p>
                   </div>
                   <div className={`p-4 rounded-2xl ${isMemberOfMonth ? 'bg-white text-orange-600' : 'bg-red-50 text-[#8B0000]'}`}>
                     <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z"/><path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd"/></svg>
@@ -307,8 +439,9 @@ export default function App() {
 
         {view === 'admin' && user.role === Role.ADMIN && (
           <div className="bg-white rounded-[3rem] shadow-sm overflow-hidden min-h-[600px] flex flex-col border border-gray-100 animate-fade-in">
-            <div className="px-10 py-8 border-b border-gray-100 bg-gray-50/20">
+            <div className="px-10 py-8 border-b border-gray-100 bg-gray-50/20 flex justify-between items-center">
                <h2 className="text-xl font-black uppercase tracking-tight text-gray-900">Painel de <span className="text-[#8B0000]">Gestão</span></h2>
+               <Button variant="info" onClick={() => setIsImportModalOpen(true)}>IMPORTAR CLOCKIFY</Button>
             </div>
             <div className="flex px-10 border-b border-gray-100 bg-white overflow-x-auto no-scrollbar">
                {[
@@ -374,14 +507,22 @@ export default function App() {
                          <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-50">
                             <div>
                                <p className="text-[9px] font-black text-gray-400 uppercase">Saldo</p>
-                               <p className="text-xl font-black text-gray-900">{m.balance} TK</p>
+                               <p className="text-xl font-black text-gray-900">{Math.floor(m.balance)} TK</p>
                             </div>
                             <div className="flex items-center gap-1.5">
-                                 <input type="number" value={adjAmounts[m.id] || ''} onChange={(e) => setAdjAmounts({...adjAmounts, [m.id]: e.target.value})}
+                                 <input type="number" step="1" value={adjAmounts[m.id] || ''} onChange={(e) => setAdjAmounts({...adjAmounts, [m.id]: e.target.value})}
                                    className="w-14 bg-gray-50 border rounded-lg px-2 py-1.5 text-xs font-black outline-none" />
-                                 <button onClick={() => { const val = Math.abs(Number(adjAmounts[m.id])); if (val) handleUpdateUser(m.id, { balance: increment(-val) }); setAdjAmounts({...adjAmounts, [m.id]: ''}); }}
+                                 <button onClick={() => { 
+                                   const val = Math.ceil(Math.abs(Number(adjAmounts[m.id]))); 
+                                   if (val) handleUpdateUser(m.id, { balance: increment(-val) }); 
+                                   setAdjAmounts({...adjAmounts, [m.id]: ''}); 
+                                 }}
                                    className="w-8 h-8 rounded-lg bg-red-50 text-red-600 font-black">-</button>
-                                 <button onClick={() => { const val = Math.abs(Number(adjAmounts[m.id])); if (val) handleUpdateUser(m.id, { balance: increment(val) }); setAdjAmounts({...adjAmounts, [m.id]: ''}); }}
+                                 <button onClick={() => { 
+                                   const val = Math.ceil(Math.abs(Number(adjAmounts[m.id]))); 
+                                   if (val) handleUpdateUser(m.id, { balance: increment(val) }); 
+                                   setAdjAmounts({...adjAmounts, [m.id]: ''}); 
+                                 }}
                                    className="w-8 h-8 rounded-lg bg-green-50 text-green-600 font-black">+</button>
                             </div>
                          </div>
@@ -419,32 +560,55 @@ export default function App() {
                 <div className="space-y-8">
                   <div className="flex items-center justify-between">
                     <h3 className="text-xs font-black uppercase text-gray-400">Estoque de Produtos</h3>
-                    <Button onClick={() => setIsAddingProduct(!isAddingProduct)} variant={isAddingProduct ? "danger" : "primary"}>
-                      {isAddingProduct ? "CANCELAR" : "+ NOVO PRODUTO"}
+                    <Button onClick={() => { 
+                      setIsAddingProduct(!isAddingProduct); 
+                      setEditingProduct(null); 
+                      setProductForm({ name: '', price: '', image: '' });
+                    }} variant={(isAddingProduct || editingProduct) ? "danger" : "primary"}>
+                      {(isAddingProduct || editingProduct) ? "CANCELAR" : "+ NOVO PRODUTO"}
                     </Button>
                   </div>
-                  {isAddingProduct && (
-                    <form onSubmit={handleAddProduct} className="bg-gray-50 border p-8 rounded-[2rem] space-y-4 animate-fade-in">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <input type="text" required value={newProductName} onChange={e => setNewProductName(e.target.value)} className="w-full bg-white px-5 py-3 rounded-xl border outline-none" placeholder="Nome do Produto" />
-                        <input type="number" required value={newProductPrice} onChange={e => setNewProductPrice(e.target.value)} className="w-full bg-white px-5 py-3 rounded-xl border outline-none" placeholder="Preço em Tokens" />
+                  
+                  {(isAddingProduct || editingProduct) && (
+                    <form onSubmit={handleProductSubmit} className="bg-gray-50 border p-8 rounded-[2rem] space-y-6 animate-fade-in shadow-inner">
+                      <div className="flex items-center gap-6">
+                        <div className="w-24 h-24 bg-white border-2 border-dashed border-gray-200 rounded-3xl flex items-center justify-center relative group overflow-hidden">
+                           {productForm.image ? (
+                             <img src={productForm.image} className="w-full h-full object-cover" />
+                           ) : (
+                             <svg className="w-8 h-8 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                           )}
+                           <label className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
+                             <span className="text-white text-[10px] font-black uppercase">Alterar Foto</span>
+                             <input type="file" className="hidden" accept="image/png, image/jpeg" onChange={(e) => handleFileUpload(e, (base64) => setProductForm({...productForm, image: base64}))} />
+                           </label>
+                        </div>
+                        <div className="flex-1 space-y-4">
+                          <input type="text" required value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} className="w-full bg-white px-5 py-3 rounded-xl border outline-none font-bold" placeholder="Nome do Produto" />
+                          <input type="number" step="1" required value={productForm.price} onChange={e => setProductForm({...productForm, price: e.target.value})} className="w-full bg-white px-5 py-3 rounded-xl border outline-none font-bold" placeholder="Preço em Tokens" />
+                        </div>
                       </div>
-                      <input type="text" required value={newProductImage} onChange={e => setNewProductImage(e.target.value)} className="w-full bg-white px-5 py-3 rounded-xl border outline-none" placeholder="URL da Imagem" />
-                      <Button type="submit" className="w-full py-4">ADICIONAR PRODUTO</Button>
+                      <Button type="submit" className="w-full py-4">{editingProduct ? "SALVAR ALTERAÇÕES" : "ADICIONAR PRODUTO"}</Button>
                     </form>
                   )}
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     {products.map(p => (
-                      <div key={p.id} className="bg-white border p-4 rounded-3xl flex flex-col gap-3 shadow-sm group">
+                      <div key={p.id} className="bg-white border p-4 rounded-3xl flex flex-col gap-3 shadow-sm group hover:border-[#8B0000]/30 transition-colors">
                          <img src={p.image} className="w-full aspect-square object-cover rounded-2xl bg-gray-50" />
                          <div className="flex items-center justify-between">
                            <div>
-                             <p className="font-black text-sm uppercase">{p.name}</p>
-                             <p className="text-xs font-bold text-red-800">{p.price} TK</p>
+                             <p className="font-black text-sm uppercase text-gray-800">{p.name}</p>
+                             <p className="text-xs font-bold text-[#8B0000]">{p.price} TK</p>
                            </div>
-                           <button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-gray-300 hover:text-red-600">
-                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                           </button>
+                           <div className="flex gap-1">
+                             <button onClick={() => startEditingProduct(p)} className="p-2 text-gray-300 hover:text-blue-600 transition-colors">
+                               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                             </button>
+                             <button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-gray-300 hover:text-red-600 transition-colors">
+                               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                             </button>
+                           </div>
                          </div>
                       </div>
                     ))}
@@ -524,6 +688,13 @@ export default function App() {
           </div>
         )}
       </nav>
+
+      <ImportModal 
+        isOpen={isImportModalOpen} 
+        onClose={() => setIsImportModalOpen(false)} 
+        onImport={handleImportClockify}
+        members={members}
+      />
     </div>
   );
 }
