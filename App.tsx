@@ -1,750 +1,578 @@
-
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  User, 
-  Product, 
-  Order, 
-  Role, 
-  OrderStatus,
-  AppBranding,
-  ClockifyData
-} from './types';
-import { 
-  GearLogo, 
-  ADMIN_EMAIL 
-} from './constants';
-import { parseClockifyReport } from './services/geminiService';
-
-// Importação do banco de dados centralizado
+import React, { useState, useEffect } from 'react';
+import { User, Product, Order, Role, OrderStatus, SiteSettings } from './types';
+import { GearLogo, ADMIN_EMAIL, INITIAL_MEMBERS, INITIAL_PRODUCTS } from './constants';
 import { db } from './firebase';
-
-// Firebase Firestore Hooks e Métodos
 import { 
-  collection, 
-  onSnapshot, 
-  doc, 
-  updateDoc, 
-  deleteDoc,
-  query,
-  orderBy,
-  addDoc,
-  writeBatch,
-  increment,
-  setDoc
+  collection, onSnapshot, doc, query, orderBy, writeBatch, 
+  increment, getDocs, updateDoc, setDoc, deleteDoc 
 } from "firebase/firestore";
 
-// --- UI Components ---
-const Modal: React.FC<{ title: string; onClose: () => void; children: React.ReactNode }> = ({ title, onClose, children }) => (
-  <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-    <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-      <div className="px-8 py-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-        <h3 className="font-black text-slate-800 uppercase tracking-widest text-sm">{title}</h3>
-        <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-2 rounded-xl transition-all">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-        </button>
-      </div>
-      <div className="p-8 max-h-[80vh] overflow-y-auto">{children}</div>
-    </div>
-  </div>
-);
-
-const ImageAdjuster: React.FC<{ 
-  src: string; 
-  onConfirm: (base64: string) => void; 
-  onCancel: () => void 
-}> = ({ src, onConfirm, onCancel }) => {
-  const [scale, setScale] = useState(1);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
-    setIsDragging(true);
-    const clientX = 'touches' in e ? (e as React.TouchEvent).touches[0].clientX : (e as React.MouseEvent).clientX;
-    const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
-    setDragStart({ x: clientX - position.x, y: clientY - position.y });
+// --- Componentes de UI ---
+const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, type = "button" }: any) => {
+  const styles = {
+    primary: "bg-[#8B0000] text-white hover:bg-red-800",
+    outline: "border border-gray-300 text-gray-700 hover:bg-gray-50",
+    danger: "bg-red-50 text-red-600 hover:bg-red-100",
+    success: "bg-green-600 text-white hover:bg-green-700"
   };
+  return (
+    <button 
+      type={type}
+      disabled={disabled}
+      onClick={onClick}
+      className={`px-4 py-2 rounded-lg font-bold text-sm transition-all active:scale-95 disabled:opacity-50 ${styles[variant]} ${className}`}
+    >
+      {children}
+    </button>
+  );
+};
 
-  const handleMouseMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDragging) return;
-    const clientX = 'touches' in e ? (e as React.TouchEvent).touches[0].clientX : (e as React.MouseEvent).clientX;
-    const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY;
-    setPosition({
-      x: clientX - dragStart.x,
-      y: clientY - dragStart.y
-    });
-  };
+const IconSearch = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>;
 
-  const handleMouseUp = () => setIsDragging(false);
-
-  const saveAdjustedImage = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const img = new Image();
-    img.onload = () => {
-      ctx.clearRect(0, 0, 400, 400);
-      ctx.fillStyle = "white";
-      ctx.fillRect(0, 0, 400, 400);
-      
-      const drawWidth = 400 * scale;
-      const drawHeight = (img.height / img.width) * drawWidth;
-      
-      const centerX = 200 + position.x;
-      const centerY = 200 + position.y;
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(200, 200, 200, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.drawImage(img, centerX - drawWidth/2, centerY - drawHeight/2, drawWidth, drawHeight);
-      ctx.restore();
-
-      onConfirm(canvas.toDataURL('image/jpeg', 0.8));
-    };
-    img.src = src;
-  };
+const LegendaryEmbers = () => {
+  const [particles, setParticles] = useState<any[]>([]);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const id = Math.random();
+      const left = Math.random() * 100;
+      const size = Math.random() * 5 + 3;
+      const duration = Math.random() * 2 + 1.5;
+      setParticles(prev => [...prev.slice(-25), { id, left, size, duration }]);
+    }, 120);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
-    <div className="fixed inset-0 z-[300] bg-slate-900/90 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-white">
-      <h2 className="text-xl font-black uppercase tracking-widest mb-8">Ajustar Foto</h2>
-      <div 
-        ref={containerRef}
-        className="relative w-72 h-72 rounded-full border-4 border-mectria-red overflow-hidden bg-slate-800 cursor-move touch-none"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onTouchStart={handleMouseDown}
-        onTouchMove={handleMouseMove}
-        onTouchEnd={handleMouseUp}
-      >
-        <img 
-          src={src} 
-          style={{ 
-            transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
-            transition: isDragging ? 'none' : 'transform 0.1s ease-out'
+    <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
+      {particles.map(p => (
+        <div
+          key={p.id}
+          className="ember-particle"
+          style={{
+            left: `${p.left}%`,
+            bottom: '-10px',
+            width: `${p.size}px`,
+            height: `${p.size}px`,
+            animationDuration: `${p.duration}s`,
           }}
-          className="w-full h-full object-contain pointer-events-none"
         />
-        <div className="absolute inset-0 pointer-events-none border-[40px] border-slate-900/40 rounded-full"></div>
-      </div>
-      <div className="w-full max-w-xs mt-12 space-y-6">
-        <div className="space-y-2">
-          <label className="text-[10px] font-black uppercase tracking-widest opacity-50 flex justify-between">
-            <span>Zoom</span>
-            <span>{Math.round(scale * 100)}%</span>
-          </label>
-          <input 
-            type="range" min="1" max="5" step="0.1" 
-            value={scale} 
-            onChange={(e) => setScale(parseFloat(e.target.value))}
-            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-mectria-red"
-          />
-        </div>
-        <div className="flex gap-4">
-          <button onClick={onCancel} className="flex-1 py-4 rounded-2xl bg-slate-800 font-black text-[10px] uppercase tracking-widest hover:bg-slate-700 transition-colors">Cancelar</button>
-          <button onClick={saveAdjustedImage} className="flex-1 py-4 rounded-2xl bg-mectria-red font-black text-[10px] uppercase tracking-widest hover:bg-red-700 transition-colors">Confirmar</button>
-        </div>
-      </div>
-      <canvas ref={canvasRef} width="400" height="400" className="hidden" />
-    </div>
-  );
-};
-
-const FeedbackToast: React.FC<{ order: Order; onClose: () => void }> = ({ order, onClose }) => (
-  <div className="fixed top-8 left-1/2 -translate-x-1/2 w-[90%] max-sm z-[150] bg-white rounded-3xl shadow-2xl border border-slate-100 p-5 flex items-center gap-4 animate-in slide-in-from-top-full duration-500">
-    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${order.status === OrderStatus.DELIVERED ? 'bg-green-100 text-green-600' : 'bg-red-50 text-red-600'}`}>
-      {order.status === OrderStatus.DELIVERED ? (
-        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
-      ) : (
-        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
-      )}
-    </div>
-    <div className="flex-1">
-      <h4 className="font-black text-slate-800 text-[10px] uppercase tracking-wider">
-        {order.status === OrderStatus.DELIVERED ? 'Resgate Aprovado! ✅' : 'Resgate Recusado ❌'}
-      </h4>
-      <p className="text-slate-400 text-[9px] font-bold uppercase mt-0.5">{order.productName}</p>
-    </div>
-    <button onClick={onClose} className="p-2 text-slate-300 hover:text-slate-500"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg></button>
-  </div>
-);
-
-const Button: React.FC<{ 
-  onClick?: () => void; 
-  className?: string; 
-  children: React.ReactNode;
-  variant?: 'primary' | 'secondary' | 'outline' | 'danger' | 'success';
-  disabled?: boolean;
-  type?: 'button' | 'submit';
-}> = ({ onClick, className = '', children, variant = 'primary', disabled = false, type = 'button' }) => {
-  const base = "px-4 py-3 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50";
-  const variants = {
-    primary: "bg-mectria-red text-white hover:bg-red-800",
-    secondary: "bg-slate-100 text-slate-700 hover:bg-slate-200",
-    outline: "border-2 border-mectria-red text-mectria-red hover:bg-red-50",
-    danger: "bg-red-100 text-red-600 hover:bg-red-200",
-    success: "bg-green-100 text-green-600 hover:bg-green-200"
-  };
-  return <button type={type} disabled={disabled} onClick={onClick} className={`${base} ${variants[variant]} ${className}`}>{children}</button>;
-};
-
-const Input: React.FC<{
-  label?: string;
-  value: string | number;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  type?: string;
-  required?: boolean;
-  placeholder?: string;
-}> = ({ label, value, onChange, type = 'text', required = false, placeholder }) => (
-  <div className="flex flex-col gap-1.5 w-full">
-    {label && <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">{label}</label>}
-    <input type={type} required={required} value={value} onChange={onChange} placeholder={placeholder} className="w-full px-4 py-3.5 rounded-2xl border border-slate-200 focus:outline-none focus:border-mectria-red transition-all text-sm font-medium" />
-  </div>
-);
-
-const FileInput: React.FC<{
-  label: string;
-  accept?: string;
-  onChange: (base64: string, mimeType: string) => void;
-  preview?: string | null;
-}> = ({ label, accept = "image/*", onChange, preview }) => {
-  const [loading, setLoading] = useState(false);
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">{label}</label>
-      <input type="file" accept={accept} onChange={async (e) => {
-        const file = e.target.files?.[0];
-        if (file) {
-          setLoading(true);
-          const reader = new FileReader();
-          reader.readAsDataURL(file);
-          reader.onload = () => { onChange(reader.result as string, file.type); setLoading(false); };
-          reader.onerror = () => setLoading(false);
-        }
-      }} className="hidden" id={`file-${label.replace(/\s+/g, '-').toLowerCase()}`} />
-      <label htmlFor={`file-${label.replace(/\s+/g, '-').toLowerCase()}`} className="flex flex-col items-center justify-center gap-2 px-4 py-6 rounded-[2rem] border-2 border-dashed border-slate-200 hover:border-mectria-red cursor-pointer text-xs font-bold text-slate-400 bg-slate-50/50 transition-all overflow-hidden">
-        {loading ? <span className="animate-pulse text-mectria-red">Aguarde...</span> : preview && preview.startsWith('data:image') ? <img src={preview} className="w-full h-32 object-contain" /> : <span>Selecionar Arquivo</span>}
-      </label>
-    </div>
-  );
-};
-
-// --- Pages ---
-const Login: React.FC<{ members: User[], onLogin: (user: User) => void; branding: AppBranding }> = ({ members, onLogin, branding }) => {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [email, setEmail] = useState('');
-  const [error, setError] = useState('');
-  const [showDropdown, setShowDropdown] = useState(false);
-
-  const filtered = useMemo(() => 
-    members.filter(m => m.name.toLowerCase().includes(searchTerm.toLowerCase())).sort((a,b) => a.name.localeCompare(b.name)).slice(0, 8)
-  , [searchTerm, members]);
-
-  const handleLogin = () => {
-    if (!selectedUser) return setError('Selecione seu nome.');
-    if (email.trim().toLowerCase() !== selectedUser.email.toLowerCase() && email.trim().toLowerCase() !== ADMIN_EMAIL) return setError('E-mail incorreto.');
-    onLogin(selectedUser);
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-md bg-white rounded-[3rem] shadow-2xl p-10 flex flex-col items-center gap-8">
-        <div className="bg-red-50 p-6 rounded-3xl animate-bounce-subtle">
-          {branding.loginLogo ? <img src={branding.loginLogo} className="w-20 h-20 object-contain" /> : <GearLogo />}
-        </div>
-        <h1 className="text-3xl font-black text-slate-800 tracking-tight">Mectria Store</h1>
-        <div className="w-full space-y-5 relative">
-          <div className="relative">
-            <Input label="Quem é você?" value={selectedUser ? selectedUser.name : searchTerm} onChange={e => { setSearchTerm(e.target.value); setSelectedUser(null); setShowDropdown(true); }} placeholder="Seu nome..." />
-            {showDropdown && searchTerm && !selectedUser && (
-              <div className="absolute top-full left-0 w-full mt-2 bg-white border rounded-2xl shadow-2xl z-50 overflow-hidden max-h-60 overflow-y-auto">
-                {filtered.map(m => (
-                  <button key={m.id} onClick={() => { setSelectedUser(m); setShowDropdown(false); }} className="w-full px-5 py-4 text-left hover:bg-red-50 flex items-center gap-3 border-b last:border-0 transition-colors">
-                    <img src={m.avatar} className="w-9 h-9 rounded-full object-cover" />
-                    <span className="font-bold text-slate-700 text-sm">{m.name}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <Input label="E-mail" value={email} onChange={e => setEmail(e.target.value)} />
-          {error && <p className="text-red-500 text-[10px] font-bold uppercase text-center bg-red-50 py-3 rounded-xl">{error}</p>}
-          <Button onClick={handleLogin} className="w-full py-5 text-sm uppercase font-black tracking-widest">Entrar</Button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const Store: React.FC<{ user: User; products: Product[]; branding: AppBranding; onBuy: (p: Product) => void }> = ({ user, products, branding, onBuy }) => (
-  <div className="p-6 pb-32 space-y-8 max-w-2xl mx-auto">
-    <div className="flex items-center justify-between">
-      {branding.storeLogo ? <img src={branding.storeLogo} className="h-8 object-contain" /> : <img src="https://mectria.com/wp-content/uploads/2021/04/Logo-Mectria-01.png" className="h-8" />}
-      <div className="flex items-center gap-3 bg-white p-1.5 pr-5 rounded-full border shadow-sm">
-        <img src={user.avatar} className="w-8 h-8 rounded-full object-cover" />
-        <span className="text-[10px] font-black text-slate-800 uppercase">{user.name.split(' ')[0]}</span>
-      </div>
-    </div>
-    <div className="bg-mectria-red rounded-[3rem] p-12 text-white shadow-2xl text-center group relative overflow-hidden">
-      <div className="relative z-10">
-        <p className="text-[10px] font-black tracking-widest opacity-50 uppercase mb-3">Saldo</p>
-        <div className="flex items-center justify-center gap-3">
-          <h2 className="text-7xl font-black tracking-tighter">{user.balance}</h2>
-          <span className="text-xl font-bold opacity-60">TK</span>
-        </div>
-      </div>
-    </div>
-    <div className="grid grid-cols-2 gap-5">
-      {products.map(p => (
-        <div key={p.id} className="bg-white rounded-[2.5rem] p-5 shadow-sm border hover:shadow-2xl transition-all group">
-          <img src={p.image} className="w-full h-36 object-cover rounded-[1.5rem] mb-5 group-hover:scale-105 transition-transform" />
-          <h4 className="font-bold text-slate-800 text-xs truncate uppercase px-1">{p.name}</h4>
-          <div className="flex items-center justify-between mt-4">
-             <span className="text-[10px] font-black text-mectria-red">{p.price} TK</span>
-             <Button onClick={() => onBuy(p)} disabled={user.balance < p.price} className="px-4 py-2 text-[9px] uppercase font-black">Resgatar</Button>
-          </div>
-        </div>
       ))}
     </div>
-  </div>
-);
-
-const Profile: React.FC<{ user: User; orders: Order[]; onLogout: () => void; onStartAvatarUpdate: (b: string) => void }> = ({ user, orders, onLogout, onStartAvatarUpdate }) => (
-  <div className="p-6 pb-32 max-w-2xl mx-auto space-y-8">
-    <div className="flex flex-col items-center gap-6 mt-12">
-      <div className="relative group">
-        <img src={user.avatar} className="w-40 h-40 rounded-[3.5rem] border-8 border-white shadow-2xl object-cover bg-slate-100" />
-        <label htmlFor="user-upload" className="absolute inset-0 bg-black/50 rounded-[3.5rem] flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer text-white">
-          <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-        </label>
-        <input id="user-upload" type="file" accept="image/*" className="hidden" onChange={e => {
-          const file = e.target.files?.[0];
-          if (file) {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = () => onStartAvatarUpdate(reader.result as string);
-          }
-        }} />
-      </div>
-      <div className="text-center">
-        <h2 className="text-3xl font-black text-slate-800 tracking-tighter">{user.name}</h2>
-        <span className="text-[10px] font-black text-white bg-mectria-red px-3 py-1 rounded-full uppercase tracking-widest mt-2 inline-block">{user.role}</span>
-      </div>
-    </div>
-    <div className="space-y-4">
-      <h4 className="font-black uppercase text-xs text-slate-400 border-l-4 border-mectria-red px-3">Seus Pedidos</h4>
-      <div className="grid gap-3">
-        {orders.filter(o => o.userId === user.id).map(o => (
-          <div key={o.id} className="bg-white p-6 rounded-[2rem] border flex items-center justify-between shadow-sm">
-            <div>
-                <h5 className="font-black text-slate-800 text-sm uppercase">{o.productName}</h5>
-                <p className="text-[10px] text-slate-400 font-bold uppercase">{o.date}</p>
-            </div>
-            <span className={`text-[8px] font-black px-3 py-1.5 rounded-full uppercase ${o.status === OrderStatus.PENDING ? 'bg-orange-50 text-orange-600' : o.status === OrderStatus.REJECTED ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{o.status}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-    <Button variant="outline" onClick={onLogout} className="w-full py-5 rounded-[2rem] text-[10px] font-black uppercase">Sair</Button>
-  </div>
-);
-
-const AdminPanel: React.FC<{ 
-  members: User[]; 
-  products: Product[]; 
-  orders: Order[]; 
-  branding: AppBranding; 
-  onAction: (type: string, p: any) => void; 
-  onImportFile: (base64: string, mime: string) => Promise<{ count: number, totalTokens: number } | null>; 
-}> = ({ members, products, orders, branding, onAction, onImportFile }) => {
-  const [tab, setTab] = useState<'orders' | 'members' | 'products' | 'clockify' | 'branding'>('orders');
-  const [loading, setLoading] = useState(false);
-  const [showMemberModal, setShowMemberModal] = useState(false);
-  const [showProductModal, setShowProductModal] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [adjustingBalance, setAdjustingBalance] = useState<{ id: string, name: string, current: number } | null>(null);
-  
-  const [newMember, setNewMember] = useState({ name: '', email: '', clockifyId: '' });
-  const [newProduct, setNewProduct] = useState({ name: '', price: 0, image: '' });
-  const [balanceAdjustValue, setBalanceAdjustValue] = useState<number>(0);
-  const [importSummary, setImportSummary] = useState<{ count: number, totalTokens: number } | null>(null);
-
-  const handleImport = async (base64: string, mime: string) => {
-    setLoading(true);
-    setImportSummary(null);
-    try {
-      const summary = await onImportFile(base64, mime);
-      if (summary) setImportSummary(summary);
-    } catch (error) {
-      alert("Erro ao importar CSV: " + (error instanceof Error ? error.message : "Arquivo inválido"));
-    } finally {
-      // GARANTE que o loading pare mesmo se der erro
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="p-6 pb-32 max-w-4xl mx-auto space-y-8">
-      <div className="flex bg-slate-200/50 p-2 rounded-[2rem] overflow-x-auto gap-2">
-        {['orders', 'members', 'products', 'clockify', 'branding'].map(t => (
-          <button key={t} onClick={() => setTab(t as any)} className={`px-6 py-3.5 rounded-2xl text-[10px] font-black uppercase whitespace-nowrap transition-all ${tab === t ? 'bg-white shadow-lg text-mectria-red' : 'text-slate-500'}`}>
-            {t === 'orders' ? 'Pedidos' : t === 'members' ? 'Time' : t === 'products' ? 'Loja' : t === 'clockify' ? 'Conversor' : 'Sistema'}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'clockify' && (
-        <div className="bg-white p-12 rounded-[3.5rem] border shadow-sm text-center space-y-8">
-          <div>
-            <h4 className="font-black uppercase text-lg text-slate-800 tracking-tight">Importar Clockify</h4>
-            <p className="text-[10px] font-bold text-slate-400 uppercase mt-2">Processamento local instantâneo</p>
-          </div>
-          
-          {!importSummary && !loading && (
-            <FileInput label="Relatório CSV" accept=".csv" onChange={handleImport} />
-          )}
-          
-          {importSummary && (
-            <div className="bg-green-50 p-8 rounded-[2.5rem] border border-green-100 animate-in zoom-in-95 duration-300">
-              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
-              </div>
-              <p className="font-black text-[12px] uppercase tracking-widest text-green-700">Importação Concluída!</p>
-              <div className="grid grid-cols-2 gap-4 mt-6">
-                <div className="bg-white p-4 rounded-2xl border border-green-100 shadow-sm">
-                   <p className="text-[10px] font-black text-slate-400 uppercase">Membros</p>
-                   <p className="text-xl font-black text-green-600">{importSummary.count}</p>
-                </div>
-                <div className="bg-white p-4 rounded-2xl border border-green-100 shadow-sm">
-                   <p className="text-[10px] font-black text-slate-400 uppercase">Tokens</p>
-                   <p className="text-xl font-black text-green-600">+{importSummary.totalTokens.toFixed(1)}</p>
-                </div>
-              </div>
-              <Button onClick={() => setImportSummary(null)} variant="success" className="mt-8 w-full py-4 text-[10px] font-black uppercase">Nova Importação</Button>
-            </div>
-          )}
-          
-          {loading && (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <div className="w-12 h-12 border-4 border-slate-100 border-t-mectria-red rounded-full animate-spin"></div>
-              <p className="text-[10px] font-black text-mectria-red uppercase animate-pulse">Processando arquivo localmente...</p>
-            </div>
-          )}
-          
-          {!importSummary && !loading && (
-            <div className="pt-4 text-left p-6 bg-slate-50 rounded-2xl border border-dashed">
-               <h6 className="text-[9px] font-black uppercase text-slate-500 mb-2">Instruções:</h6>
-               <ul className="text-[9px] font-bold text-slate-400 uppercase space-y-2">
-                 <li>1. Vá ao Clockify > Reports > Summary</li>
-                 <li>2. Clique em "Export" > "Save as CSV"</li>
-                 <li>3. Suba o arquivo acima</li>
-               </ul>
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === 'orders' && (
-        <div className="space-y-4">
-          <h4 className="font-black uppercase text-xs px-2 border-l-4 border-mectria-red">Pedidos Pendentes</h4>
-          {orders.filter(o => o.status === OrderStatus.PENDING).length === 0 ? (
-            <p className="text-center py-12 text-slate-300 font-black uppercase text-[10px] tracking-widest">Nenhum pedido pendente</p>
-          ) : (
-            orders.filter(o => o.status === OrderStatus.PENDING).map(o => {
-              const m = members.find(u => u.id === o.userId);
-              return (
-                <div key={o.id} className="bg-white p-6 rounded-[2.5rem] border flex items-center gap-6 shadow-sm">
-                  <img src={m?.avatar} className="w-14 h-14 rounded-2xl object-cover bg-slate-50" />
-                  <div className="flex-1">
-                    <h5 className="font-black text-slate-800 text-sm uppercase">{m?.name}</h5>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase">{o.productName} • {o.price} TK</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button onClick={() => onAction('approve_order', o)} variant="success" className="p-3"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg></Button>
-                    <Button onClick={() => onAction('reject_order', o)} variant="danger" className="p-3"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg></Button>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
-
-      {tab === 'members' && (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h4 className="font-black uppercase text-xs px-2 border-l-4 border-mectria-red">Equipe Mectria</h4>
-            <Button onClick={() => setShowMemberModal(true)} variant="primary" className="text-[10px] px-6 rounded-full font-black uppercase">Novo Membro</Button>
-          </div>
-          <div className="bg-white rounded-[2rem] border overflow-hidden shadow-sm">
-            <table className="w-full text-left">
-              <thead className="bg-slate-50 border-b text-[9px] font-black uppercase text-slate-400">
-                <tr>
-                  <th className="px-6 py-4">Membro</th>
-                  <th className="px-6 py-4">Saldo</th>
-                  <th className="px-6 py-4">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y text-sm">
-                {members.sort((a,b)=>a.name.localeCompare(b.name)).map(m => (
-                  <tr key={m.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-4 flex items-center gap-3 font-bold"><img src={m.avatar} className="w-8 h-8 rounded-full object-cover" /> {m.name}</td>
-                    <td className="px-6 py-4 font-black text-mectria-red">{m.balance} TK</td>
-                    <td className="px-6 py-4 flex items-center gap-4">
-                      <button onClick={() => setAdjustingBalance({ id: m.id, name: m.name, current: m.balance })} className="text-blue-500 hover:text-blue-700 font-black uppercase text-[9px]">Ajustar</button>
-                      <button onClick={() => onAction('delete_member', m.id)} className="text-red-400 hover:text-red-600 font-black uppercase text-[9px]">Excluir</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {tab === 'products' && (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h4 className="font-black uppercase text-xs px-2 border-l-4 border-mectria-red">Itens da Loja</h4>
-            <Button onClick={() => setShowProductModal(true)} variant="primary" className="text-[10px] px-6 rounded-full font-black uppercase">Novo Produto</Button>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            {products.map(p => (
-              <div key={p.id} className="bg-white p-4 rounded-[2rem] border flex flex-col gap-3 group relative">
-                <img src={p.image} className="w-full h-24 object-cover rounded-2xl" />
-                <div>
-                   <h6 className="font-black text-xs uppercase truncate">{p.name}</h6>
-                   <p className="text-[10px] font-bold text-mectria-red">{p.price} TK</p>
-                </div>
-                <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => setEditingProduct(p)} className="p-2 bg-white/90 rounded-xl text-blue-500 shadow-sm hover:bg-blue-50">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                  </button>
-                  <button onClick={() => onAction('delete_product', p.id)} className="p-2 bg-white/90 rounded-xl text-red-500 shadow-sm hover:bg-red-50">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {tab === 'branding' && (
-        <div className="bg-white p-10 rounded-[3rem] border shadow-sm space-y-10">
-          <h4 className="font-black uppercase text-xs px-2 border-l-4 border-mectria-red">Identidade Visual</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <FileInput label="Logo da Tela de Login" preview={branding.loginLogo} onChange={(b) => onAction('update_branding', { ...branding, loginLogo: b })} />
-            <FileInput label="Logo do Topo da Loja" preview={branding.storeLogo} onChange={(b) => onAction('update_branding', { ...branding, storeLogo: b })} />
-          </div>
-          <p className="text-center text-[9px] font-bold text-slate-400 uppercase">Dica: Use logos em PNG transparente para melhor resultado.</p>
-        </div>
-      )}
-
-      {/* Modal Adicionar Membro */}
-      {showMemberModal && (
-        <Modal title="Novo Membro" onClose={() => setShowMemberModal(false)}>
-          <div className="space-y-4">
-            <Input label="Nome Completo" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})} placeholder="Ex: Marcelo Zaiden" />
-            <Input label="E-mail Corporativo" value={newMember.email} onChange={e => setNewMember({...newMember, email: e.target.value})} placeholder="Ex: marcelo.zaiden@mectria.com" />
-            <Input label="ID Clockify (Nome no Relatório)" value={newMember.clockifyId} onChange={e => setNewMember({...newMember, clockifyId: e.target.value})} placeholder="Nome exato do Clockify" />
-            <Button onClick={() => { onAction('add_member', newMember); setShowMemberModal(false); setNewMember({name:'', email:'', clockifyId:''}); }} className="w-full py-4 text-[10px] font-black uppercase mt-4">Salvar Membro</Button>
-          </div>
-        </Modal>
-      )}
-
-      {/* Modal Adicionar Produto */}
-      {showProductModal && (
-        <Modal title="Novo Produto" onClose={() => setShowProductModal(false)}>
-          <div className="space-y-4">
-            <Input label="Nome do Produto" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} />
-            <Input label="Preço (Tokens)" type="number" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: parseInt(e.target.value) || 0})} />
-            <FileInput label="Imagem do Produto" onChange={(b) => setNewProduct({...newProduct, image: b})} preview={newProduct.image} />
-            <Button onClick={() => { onAction('add_product', newProduct); setShowProductModal(false); setNewProduct({name:'', price:0, image:''}); }} className="w-full py-4 text-[10px] font-black uppercase mt-4">Cadastrar Item</Button>
-          </div>
-        </Modal>
-      )}
-
-      {/* Modal Editar Produto */}
-      {editingProduct && (
-        <Modal title="Editar Produto" onClose={() => setEditingProduct(null)}>
-          <div className="space-y-4">
-            <Input label="Nome do Produto" value={editingProduct.name} onChange={e => setEditingProduct({...editingProduct, name: e.target.value})} />
-            <Input label="Preço (Tokens)" type="number" value={editingProduct.price} onChange={e => setEditingProduct({...editingProduct, price: parseInt(e.target.value) || 0})} />
-            <FileInput label="Alterar Imagem" onChange={(b) => setEditingProduct({...editingProduct, image: b})} preview={editingProduct.image} />
-            <Button onClick={() => { onAction('update_product', editingProduct); setEditingProduct(null); }} className="w-full py-4 text-[10px] font-black uppercase mt-4">Salvar Alterações</Button>
-          </div>
-        </Modal>
-      )}
-
-      {/* Modal Ajustar Saldo */}
-      {adjustingBalance && (
-        <Modal title={`Ajustar Saldo: ${adjustingBalance.name}`} onClose={() => setAdjustingBalance(null)}>
-          <div className="space-y-6">
-            <div className="p-4 bg-slate-50 rounded-2xl text-center">
-              <span className="text-[10px] font-black text-slate-400 uppercase">Saldo Atual</span>
-              <p className="text-2xl font-black text-slate-800">{adjustingBalance.current} TK</p>
-            </div>
-            <Input label="Valor a adicionar/remover" type="number" value={balanceAdjustValue} onChange={e => setBalanceAdjustValue(parseInt(e.target.value) || 0)} placeholder="Ex: 10 ou -10" />
-            <div className="flex gap-3">
-              <Button onClick={() => { onAction('adjust_balance', { id: adjustingBalance.id, amount: balanceAdjustValue }); setAdjustingBalance(null); setBalanceAdjustValue(0); }} variant="primary" className="flex-1 py-4 text-[10px] font-black uppercase">Atualizar Saldo</Button>
-            </div>
-            <p className="text-[9px] font-bold text-slate-400 text-center uppercase">Use valores negativos para remover tokens do membro.</p>
-          </div>
-        </Modal>
-      )}
-    </div>
   );
 };
 
-// --- Main App ---
-const App: React.FC = () => {
+export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [members, setMembers] = useState<User[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [branding, setBranding] = useState<AppBranding>({ loginLogo: null, storeLogo: null });
-  const [page, setPage] = useState<'home' | 'profile' | 'admin'>('home');
-  const [isInitializing, setIsInitializing] = useState(true);
+  const [settings, setSettings] = useState<SiteSettings>({ loginLogo: '', storeLogo: '' });
+  const [view, setView] = useState<'store' | 'profile' | 'admin'>('store');
+  const [adminTab, setAdminTab] = useState<'orders' | 'members' | 'products' | 'logos'>('orders');
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
   
-  const [activeNotification, setActiveNotification] = useState<Order | null>(null);
-  const [adjustingAvatar, setAdjustingAvatar] = useState<string | null>(null);
+  const [isAddingMember, setIsAddingMember] = useState(false);
+  const [newMemberName, setNewMemberName] = useState('');
+  const [newMemberEmail, setNewMemberEmail] = useState('');
+
+  const [isAddingProduct, setIsAddingProduct] = useState(false);
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductPrice, setNewProductPrice] = useState('');
+  const [newProductImage, setNewProductImage] = useState('');
+
+  const [adjAmounts, setAdjAmounts] = useState<{[key: string]: string}>({});
 
   useEffect(() => {
-    try {
-      const unsubMembers = onSnapshot(collection(db, "members"), ss => {
-        const loaded = ss.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
-        setMembers(loaded);
-        setIsInitializing(false);
+    async function init() {
+      const membersSnap = await getDocs(collection(db, "members"));
+      if (membersSnap.empty) {
+        const batch = writeBatch(db);
+        INITIAL_MEMBERS.forEach(m => batch.set(doc(db, "members", m.id), { ...m, isMemberOfMonth: false }));
+        INITIAL_PRODUCTS.forEach(p => batch.set(doc(db, "products", p.id), p));
+        await batch.commit();
+      }
+      onSnapshot(doc(db, "settings", "branding"), (doc) => {
+        if (doc.exists()) setSettings(doc.data() as SiteSettings);
       });
-      const unsubProducts = onSnapshot(collection(db, "products"), ss => setProducts(ss.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product))));
-      const unsubOrders = onSnapshot(query(collection(db, "orders"), orderBy("timestamp", "desc")), ss => {
-        const allOrders = ss.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-        setOrders(allOrders);
-        if (user) {
-          const unviewed = allOrders.find(o => o.userId === user.id && o.status !== OrderStatus.PENDING && !o.viewed);
-          if (unviewed) setActiveNotification(unviewed);
-        }
-      });
-      const unsubBranding = onSnapshot(doc(db, "config", "branding"), ds => ds.exists() && setBranding(ds.data() as AppBranding));
-      return () => { unsubMembers(); unsubProducts(); unsubOrders(); unsubBranding(); };
-    } catch (e) { setIsInitializing(false); }
-  }, [user]);
-
-  useEffect(() => {
-    if (user) {
-      const live = members.find(m => m.id === user.id);
-      if (live && (live.balance !== user.balance || live.avatar !== user.avatar)) setUser(live);
     }
-  }, [members, user]);
+    init();
 
-  const handleAction = async (type: string, p: any) => {
-    try {
-      if (type === 'approve_order') await updateDoc(doc(db, "orders", p.id), { status: OrderStatus.DELIVERED, viewed: false, updatedAt: Date.now() });
-      if (type === 'reject_order') {
-        await updateDoc(doc(db, "orders", p.id), { status: OrderStatus.REJECTED, viewed: false, updatedAt: Date.now() });
-        await updateDoc(doc(db, "members", p.userId), { balance: increment(p.price) });
+    const unsubMembers = onSnapshot(collection(db, "members"), (snap) => {
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as User));
+      setMembers(data);
+      if (user) {
+        const updated = data.find(m => m.id === user.id);
+        if (updated) {
+          const finalUser = updated.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? { ...updated, role: Role.ADMIN } : updated;
+          setUser(finalUser);
+        }
       }
-      if (type === 'delete_member') await deleteDoc(doc(db, "members", p));
-      if (type === 'add_member') await addDoc(collection(db, "members"), { ...p, role: Role.USER, balance: 0, avatar: 'https://i.pravatar.cc/150' });
-      if (type === 'adjust_balance') await updateDoc(doc(db, "members", p.id), { balance: increment(p.amount) });
-      if (type === 'delete_product') await deleteDoc(doc(db, "products", p));
-      if (type === 'add_product') await addDoc(collection(db, "products"), p);
-      if (type === 'update_product') {
-        const { id, ...data } = p;
-        await updateDoc(doc(db, "products", id), data);
-      }
-      if (type === 'update_branding') await setDoc(doc(db, "config", "branding"), p);
-    } catch (e) { console.error(type, e); }
-  };
+      setLoading(false);
+    });
+
+    onSnapshot(collection(db, "products"), (snap) => {
+      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() } as Product)));
+    });
+
+    onSnapshot(query(collection(db, "orders"), orderBy("timestamp", "desc")), (snap) => {
+      setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() } as Order)));
+    });
+  }, [user?.id]);
 
   const handleBuy = async (p: Product) => {
     if (!user || user.balance < p.price) return;
     try {
-      const orderData = {
-        userId: user.id, productId: p.id, productName: p.name, price: p.price, status: OrderStatus.PENDING,
-        date: new Date().toLocaleDateString('pt-BR'), timestamp: Date.now(), viewed: false
-      };
-      await addDoc(collection(db, "orders"), orderData);
-      await updateDoc(doc(db, "members", user.id), { balance: increment(-p.price) });
-    } catch (e) { alert("Erro ao processar pedido."); }
+      const batch = writeBatch(db);
+      const orderRef = doc(collection(db, "orders"));
+      batch.set(orderRef, {
+        userId: user.id, userName: user.name, productId: p.id, productName: p.name,
+        price: p.price, status: OrderStatus.PENDING, date: new Date().toLocaleDateString('pt-BR'),
+        timestamp: Date.now()
+      });
+      batch.update(doc(db, "members", user.id), { balance: increment(-p.price) });
+      await batch.commit();
+      alert("Resgate realizado com sucesso!");
+    } catch (e: any) { alert(e.message); }
   };
 
-  if (isInitializing) return <div className="min-h-screen flex items-center justify-center font-black text-slate-300 uppercase tracking-widest text-[10px]">Sincronizando Mectria...</div>;
+  const handleUpdateUser = async (uId: string, data: Partial<User>) => {
+    await updateDoc(doc(db, "members", uId), data);
+  };
+
+  const handleAddMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMemberName || !newMemberEmail) return;
+    try {
+      const id = `m${Date.now()}`;
+      const email = newMemberEmail.toLowerCase().trim();
+      const newMember: User = {
+        id, name: newMemberName, email,
+        role: email === ADMIN_EMAIL.toLowerCase() ? Role.ADMIN : Role.USER,
+        isMemberOfMonth: false, clockifyId: newMemberName, balance: 0,
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`
+      };
+      await setDoc(doc(db, "members", id), newMember);
+      setIsAddingMember(false);
+      setNewMemberName(''); setNewMemberEmail('');
+      alert("Membro cadastrado!");
+    } catch (err: any) { alert("Erro: " + err.message); }
+  };
+
+  const handleAddProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProductName || !newProductPrice || !newProductImage) return;
+    try {
+      const id = `p${Date.now()}`;
+      const newProduct: Product = {
+        id, name: newProductName, price: Number(newProductPrice), image: newProductImage
+      };
+      await setDoc(doc(db, "products", id), newProduct);
+      setIsAddingProduct(false);
+      setNewProductName(''); setNewProductPrice(''); setNewProductImage('');
+      alert("Produto adicionado!");
+    } catch (err: any) { alert("Erro: " + err.message); }
+  };
+
+  const handleDeleteProduct = async (id: string) => {
+    if (window.confirm("Deseja remover este produto?")) {
+      await deleteDoc(doc(db, "products", id));
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, callback: (base64: string) => void) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => callback(reader.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const updateSettings = async (data: Partial<SiteSettings>) => {
+    await setDoc(doc(db, "settings", "branding"), data, { merge: true });
+    alert("Configurações atualizadas!");
+  };
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center bg-white"><div className="w-8 h-8 border-4 border-[#8B0000] border-t-transparent rounded-full animate-spin"></div></div>;
+  if (!user) return <Login members={members} onLogin={setUser} settings={settings} />;
+
+  const isMemberOfMonth = user.isMemberOfMonth;
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {!user ? (
-        <Login members={members} onLogin={setUser} branding={branding} />
-      ) : (
-        <>
-          {adjustingAvatar && <ImageAdjuster src={adjustingAvatar} onConfirm={async b => { await updateDoc(doc(db, "members", user.id), { avatar: b }); setAdjustingAvatar(null); }} onCancel={() => setAdjustingAvatar(null)} />}
-          {activeNotification && <FeedbackToast order={activeNotification} onClose={async () => { await updateDoc(doc(db, "orders", activeNotification.id), { viewed: true }); setActiveNotification(null); }} />}
+    <div className="min-h-screen bg-[#F3F4F6] flex flex-col pb-32">
+      <header className="bg-white px-6 py-4 flex items-center justify-between border-b border-gray-200 sticky top-0 z-50">
+        <div className="flex items-center gap-3">
+          {settings.storeLogo ? <img src={settings.storeLogo} className="h-8" alt="Logo" /> : <GearLogo />}
+          <div className="relative hidden md:block">
+            <input 
+              type="text" placeholder="Buscar produto..." value={search} onChange={e => setSearch(e.target.value)}
+              className="pl-10 pr-4 py-2 bg-gray-100 rounded-full border-none focus:ring-1 focus:ring-red-800 text-sm w-64"
+            />
+            <div className="absolute left-3 top-2.5 text-gray-400"><IconSearch /></div>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <img 
+            src={user.avatar} 
+            className={`w-10 h-10 rounded-full border border-gray-200 object-cover ${isMemberOfMonth ? 'legendary-avatar' : ''}`} 
+            alt="Avatar" 
+          />
+        </div>
+      </header>
 
-          <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 w-[92%] max-w-lg bg-white/80 backdrop-blur-2xl px-10 py-6 flex items-center justify-between z-50 rounded-[3.5rem] shadow-2xl border border-white">
-            <button onClick={() => setPage('home')} className={`flex flex-col items-center gap-1.5 ${page === 'home' ? 'text-mectria-red font-black scale-110' : 'text-slate-300'}`}>
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" /></svg>
-              <span className="text-[7px] uppercase font-black">Loja</span>
-            </button>
-            <button onClick={() => setPage('profile')} className={`flex flex-col items-center gap-1.5 relative ${page === 'profile' ? 'text-mectria-red font-black scale-110' : 'text-slate-300'}`}>
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" /></svg>
-              <span className="text-[7px] uppercase font-black">Perfil</span>
-            </button>
-            {user.role === Role.ADMIN && (
-              <button onClick={() => setPage('admin')} className={`flex flex-col items-center gap-1.5 ${page === 'admin' ? 'text-mectria-red font-black scale-110' : 'text-slate-300'}`}>
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M5 4a1 1 0 00-2 0v7.268a2 2 0 000 3.464V16a1 1 0 102 0v-1.268a2 2 0 000-3.464V4zM11 4a1 1 0 10-2 0v1.268a2 2 0 000 3.464V16a1 1 0 102 0V8.732a2 2 0 000-3.464V4zM16 3a1 1 0 011 1v7.268a2 2 0 010 3.464V16a1 1 0 11-2 0v-1.268a2 2 0 010-3.464V4a1 1 0 011-1z" /></svg>
-                <span className="text-[7px] uppercase font-black">Admin</span>
-              </button>
-            )}
-          </nav>
-          <main>
-            {page === 'home' && <Store user={user} products={products} branding={branding} onBuy={handleBuy} />}
-            {page === 'profile' && <Profile user={user} orders={orders} onLogout={() => setUser(null)} onStartAvatarUpdate={setAdjustingAvatar} />}
-            {page === 'admin' && (
-              <AdminPanel 
-                members={members} products={products} orders={orders} branding={branding} onAction={handleAction} 
-                onImportFile={async (b, m) => {
-                  const data = await parseClockifyReport(b, m);
-                  const batch = writeBatch(db);
-                  let count = 0;
-                  let totalTokens = 0;
-                  
-                  data.forEach(entry => {
-                    // Busca resiliente por nome exato ou ID de clockify
-                    const target = members.find(u => 
-                      u.clockifyId?.trim().toLowerCase() === entry.user.trim().toLowerCase() || 
-                      u.name.trim().toLowerCase() === entry.user.trim().toLowerCase() ||
-                      u.name.trim().toLowerCase().includes(entry.user.trim().toLowerCase())
-                    );
-                    
-                    if (target) {
-                      batch.update(doc(db, "members", target.id), { balance: increment(entry.tokens) });
-                      count++;
-                      totalTokens += entry.tokens;
-                    }
-                  });
-                  
-                  if (count > 0) {
-                    await batch.commit();
-                    return { count, totalTokens };
-                  }
-                  
-                  throw new Error("Nenhum membro do arquivo foi encontrado no sistema. Verifique os nomes cadastrados no time.");
-                }} 
-              />
-            )}
-          </main>
-        </>
-      )}
+      <main className="flex-1 max-w-5xl mx-auto w-full p-4 md:p-6 animate-fade-in">
+        {view === 'store' && (
+          <div className="space-y-8">
+            <div className={`rounded-[2.5rem] p-10 md:p-14 text-white relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-10 shadow-lg ${isMemberOfMonth ? 'legendary-card' : 'bg-[#8B0000]'}`}>
+               {isMemberOfMonth && <LegendaryEmbers />}
+               <div className="flex items-center gap-8 z-10">
+                  <div className="relative">
+                    <img 
+                      src={user.avatar} 
+                      className={`w-32 h-32 md:w-40 md:h-40 rounded-3xl border-4 border-white/20 shadow-2xl object-cover transition-transform hover:scale-105 ${isMemberOfMonth ? 'legendary-avatar' : ''}`} 
+                      alt="Sua foto" 
+                    />
+                    {isMemberOfMonth && <div className="absolute -top-3 -right-3 bg-yellow-400 text-black px-3 py-1 rounded-full text-[10px] font-black uppercase shadow-lg animate-bounce">Lendário ★</div>}
+                  </div>
+                  <div className="text-left">
+                    <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-2">Bem-vindo(a),</p>
+                    <h1 className="text-3xl md:text-5xl font-black">{user.name.split(' ')[0]}</h1>
+                    <div className="flex flex-wrap gap-2 mt-4">
+                       <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase bg-black/10">
+                         {user.role === Role.ADMIN ? 'Administrador ⚙️' : 'Membro Staff 🤝'}
+                       </span>
+                       {isMemberOfMonth && <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase bg-white text-orange-600">Membro do Mês 🏆</span>}
+                    </div>
+                  </div>
+               </div>
+               <div className="bg-white/10 backdrop-blur-md rounded-[2.5rem] p-10 flex flex-col items-center justify-center border border-white/10 z-10 min-w-[240px] shadow-inner text-center">
+                 <span className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-2">Seus Tokens</span>
+                 <div className="flex items-center gap-3">
+                   <span className="text-6xl font-black tabular-nums">{user.balance}</span>
+                   <span className="text-sm font-bold opacity-80">TK</span>
+                 </div>
+               </div>
+            </div>
+
+            <div className="flex items-center justify-between px-2">
+              <h2 className="text-lg font-bold text-gray-800 uppercase tracking-widest">Vitrine</h2>
+              <span className="text-xs text-gray-400 font-bold uppercase">{products.length} itens</span>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+              {products.filter(p => p.name.toLowerCase().includes(search.toLowerCase())).map(p => (
+                <div key={p.id} className="bg-white rounded-[2rem] p-5 shadow-sm flex flex-col gap-4 group hover:shadow-xl transition-all border border-gray-100">
+                  <div className="aspect-square rounded-2xl overflow-hidden bg-gray-50 border border-gray-50">
+                    <img src={p.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt={p.name} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-gray-800 line-clamp-1 uppercase">{p.name}</h3>
+                    <p className="text-xs text-[#8B0000] font-black mt-1">● {p.price} tokens</p>
+                  </div>
+                  <Button onClick={() => handleBuy(p)} disabled={user.balance < p.price} className="w-full mt-auto py-3">RESGATAR</Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {view === 'profile' && (
+          <div className="max-w-xl mx-auto py-4">
+            <div className={`rounded-[3.5rem] p-12 text-center relative overflow-hidden shadow-lg bg-white ${isMemberOfMonth ? 'legendary-card text-white' : ''}`}>
+               {isMemberOfMonth && <LegendaryEmbers />}
+               <h2 className={`text-xs font-black uppercase tracking-[0.4em] ${isMemberOfMonth ? 'text-white/60' : 'text-gray-400'} mb-10 z-10 relative`}>Meu Perfil</h2>
+               <div className="relative inline-block mb-6 group z-10">
+                  <img src={user.avatar} className={`w-40 h-40 rounded-[2.5rem] mx-auto border-4 border-white shadow-xl object-cover ${isMemberOfMonth ? 'legendary-avatar' : ''}`} alt="Avatar" />
+                  <label className="absolute inset-0 bg-black/40 rounded-[2.5rem] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                    <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (base64) => handleUpdateUser(user.id, { avatar: base64 }))} />
+                  </label>
+               </div>
+               <h3 className={`text-4xl font-black tracking-tight ${isMemberOfMonth ? 'text-white' : 'text-gray-900'} relative z-10`}>{user.name}</h3>
+               <p className={`text-[10px] font-black uppercase tracking-[0.3em] mt-2 opacity-60 relative z-10`}>{user.email}</p>
+               <div className={`mt-10 p-10 rounded-3xl flex items-center justify-between z-10 relative ${isMemberOfMonth ? 'bg-white/10' : 'bg-gray-50'}`}>
+                  <div className="text-left">
+                    <p className={`text-[10px] font-black uppercase ${isMemberOfMonth ? 'text-white/50' : 'text-gray-400'}`}>Saldo Atual</p>
+                    <p className={`text-4xl font-black ${isMemberOfMonth ? 'text-white' : 'text-gray-800'}`}>{user.balance} <span className="text-sm">TK</span></p>
+                  </div>
+                  <div className={`p-4 rounded-2xl ${isMemberOfMonth ? 'bg-white text-orange-600' : 'bg-red-50 text-[#8B0000]'}`}>
+                    <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z"/><path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd"/></svg>
+                  </div>
+               </div>
+               <Button variant="outline" className={`w-full mt-12 py-5 border-2 rounded-2xl ${isMemberOfMonth ? 'border-white text-white hover:bg-white/10' : ''}`} onClick={() => setUser(null)}>SAIR DA CONTA</Button>
+            </div>
+          </div>
+        )}
+
+        {view === 'admin' && user.role === Role.ADMIN && (
+          <div className="bg-white rounded-[3rem] shadow-sm overflow-hidden min-h-[600px] flex flex-col border border-gray-100 animate-fade-in">
+            <div className="px-10 py-8 border-b border-gray-100 bg-gray-50/20">
+               <h2 className="text-xl font-black uppercase tracking-tight text-gray-900">Painel de <span className="text-[#8B0000]">Gestão</span></h2>
+            </div>
+            <div className="flex px-10 border-b border-gray-100 bg-white overflow-x-auto no-scrollbar">
+               {[
+                 { id: 'orders', label: 'PEDIDOS' },
+                 { id: 'members', label: 'MEMBROS' },
+                 { id: 'products', label: 'ESTOQUE' },
+                 { id: 'logos', label: 'LOGOS' }
+               ].map((tab) => (
+                 <button 
+                   key={tab.id} 
+                   onClick={() => setAdminTab(tab.id as any)} 
+                   className={`px-8 py-5 text-[10px] font-black tracking-widest transition-all ${adminTab === tab.id ? 'text-[#8B0000] border-b-4 border-[#8B0000]' : 'text-gray-400'}`}
+                 >
+                   {tab.label}
+                 </button>
+               ))}
+            </div>
+
+            <div className="p-10 flex-1 overflow-y-auto">
+              {adminTab === 'members' && (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-black uppercase text-gray-400">Controle de Membros</h3>
+                    <Button onClick={() => setIsAddingMember(!isAddingMember)} variant={isAddingMember ? "danger" : "primary"}>
+                      {isAddingMember ? "CANCELAR" : "+ NOVO MEMBRO"}
+                    </Button>
+                  </div>
+                  {isAddingMember && (
+                    <form onSubmit={handleAddMember} className="bg-gray-50 border p-8 rounded-[2rem] space-y-4 animate-fade-in">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <input type="text" required value={newMemberName} onChange={e => setNewMemberName(e.target.value)} className="w-full bg-white px-5 py-3 rounded-xl border outline-none" placeholder="Nome" />
+                        <input type="email" required value={newMemberEmail} onChange={e => setNewMemberEmail(e.target.value)} className="w-full bg-white px-5 py-3 rounded-xl border outline-none" placeholder="Email @mectria.com" />
+                      </div>
+                      <Button type="submit" className="w-full py-4">CADASTRAR</Button>
+                    </form>
+                  )}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {members.map(m => (
+                      <div key={m.id} className={`p-6 rounded-3xl border transition-all ${m.isMemberOfMonth ? 'border-orange-200 bg-orange-50' : 'bg-gray-50 border-gray-100'}`}>
+                         <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-4">
+                               <img src={m.avatar} className="w-14 h-14 rounded-2xl object-cover border border-white" alt="Membro" />
+                               <div>
+                                  <p className="text-sm font-black text-gray-900">{m.name}</p>
+                                  <div className="flex gap-1 mt-1">
+                                    <span className={`text-[8px] font-black px-2 py-0.5 rounded-full uppercase ${m.role === Role.ADMIN ? 'bg-red-800 text-white' : 'bg-gray-200 text-gray-400'}`}>{m.role}</span>
+                                    {m.isMemberOfMonth && <span className="text-[8px] font-black bg-orange-500 text-white px-2 py-0.5 rounded-full">★ MÊS</span>}
+                                  </div>
+                               </div>
+                            </div>
+                            <div className="flex flex-col gap-1 items-end">
+                                <select value={m.role} onChange={(e) => handleUpdateUser(m.id, { role: e.target.value as Role })}
+                                  className="text-[9px] font-black border rounded-lg p-1.5 bg-white outline-none uppercase">
+                                  <option value={Role.USER}>Membro</option>
+                                  <option value={Role.ADMIN}>Admin</option>
+                                </select>
+                                <button onClick={() => handleUpdateUser(m.id, { isMemberOfMonth: !m.isMemberOfMonth })}
+                                  className={`text-[9px] font-black px-2 py-1.5 rounded-lg uppercase ${m.isMemberOfMonth ? 'bg-orange-600 text-white' : 'bg-white text-gray-400 border shadow-sm'}`}>
+                                  {m.isMemberOfMonth ? 'REMOVER DESTAQUE' : 'DESTAQUE MÊS'}
+                                </button>
+                            </div>
+                         </div>
+                         <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-50">
+                            <div>
+                               <p className="text-[9px] font-black text-gray-400 uppercase">Saldo</p>
+                               <p className="text-xl font-black text-gray-900">{m.balance} TK</p>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                 <input type="number" value={adjAmounts[m.id] || ''} onChange={(e) => setAdjAmounts({...adjAmounts, [m.id]: e.target.value})}
+                                   className="w-14 bg-gray-50 border rounded-lg px-2 py-1.5 text-xs font-black outline-none" />
+                                 <button onClick={() => { const val = Math.abs(Number(adjAmounts[m.id])); if (val) handleUpdateUser(m.id, { balance: increment(-val) }); setAdjAmounts({...adjAmounts, [m.id]: ''}); }}
+                                   className="w-8 h-8 rounded-lg bg-red-50 text-red-600 font-black">-</button>
+                                 <button onClick={() => { const val = Math.abs(Number(adjAmounts[m.id])); if (val) handleUpdateUser(m.id, { balance: increment(val) }); setAdjAmounts({...adjAmounts, [m.id]: ''}); }}
+                                   className="w-8 h-8 rounded-lg bg-green-50 text-green-600 font-black">+</button>
+                            </div>
+                         </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {adminTab === 'orders' && (
+                <div className="space-y-4">
+                  {orders.filter(o => o.status === OrderStatus.PENDING).map(o => (
+                    <div key={o.id} className="bg-gray-50 p-8 rounded-3xl flex items-center justify-between border border-gray-100">
+                      <div className="flex items-center gap-6">
+                        <div className="bg-white p-5 rounded-2xl shadow-sm text-[#8B0000] font-black text-2xl">{o.price}</div>
+                        <div>
+                          <p className="text-md font-black text-gray-900 uppercase">{o.userName}</p>
+                          <p className="text-xs text-gray-400 font-bold uppercase">{o.productName}</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                         <Button onClick={async () => {
+                           const batch = writeBatch(db);
+                           batch.update(doc(db, "orders", o.id), { status: OrderStatus.REJECTED });
+                           batch.update(doc(db, "members", o.userId), { balance: increment(o.price) });
+                           await batch.commit();
+                         }} variant="danger">RECUSAR</Button>
+                         <Button onClick={() => updateDoc(doc(db, "orders", o.id), { status: OrderStatus.DELIVERED })} variant="success">ENTREGAR</Button>
+                      </div>
+                    </div>
+                  ))}
+                  {orders.filter(o => o.status === OrderStatus.PENDING).length === 0 && <p className="text-center text-gray-400 py-16 font-black uppercase text-xs tracking-widest">Sem pedidos pendentes.</p>}
+                </div>
+              )}
+              {adminTab === 'products' && (
+                <div className="space-y-8">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-black uppercase text-gray-400">Estoque de Produtos</h3>
+                    <Button onClick={() => setIsAddingProduct(!isAddingProduct)} variant={isAddingProduct ? "danger" : "primary"}>
+                      {isAddingProduct ? "CANCELAR" : "+ NOVO PRODUTO"}
+                    </Button>
+                  </div>
+                  {isAddingProduct && (
+                    <form onSubmit={handleAddProduct} className="bg-gray-50 border p-8 rounded-[2rem] space-y-4 animate-fade-in">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <input type="text" required value={newProductName} onChange={e => setNewProductName(e.target.value)} className="w-full bg-white px-5 py-3 rounded-xl border outline-none" placeholder="Nome do Produto" />
+                        <input type="number" required value={newProductPrice} onChange={e => setNewProductPrice(e.target.value)} className="w-full bg-white px-5 py-3 rounded-xl border outline-none" placeholder="Preço em Tokens" />
+                      </div>
+                      <input type="text" required value={newProductImage} onChange={e => setNewProductImage(e.target.value)} className="w-full bg-white px-5 py-3 rounded-xl border outline-none" placeholder="URL da Imagem" />
+                      <Button type="submit" className="w-full py-4">ADICIONAR PRODUTO</Button>
+                    </form>
+                  )}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {products.map(p => (
+                      <div key={p.id} className="bg-white border p-4 rounded-3xl flex flex-col gap-3 shadow-sm group">
+                         <img src={p.image} className="w-full aspect-square object-cover rounded-2xl bg-gray-50" />
+                         <div className="flex items-center justify-between">
+                           <div>
+                             <p className="font-black text-sm uppercase">{p.name}</p>
+                             <p className="text-xs font-bold text-red-800">{p.price} TK</p>
+                           </div>
+                           <button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-gray-300 hover:text-red-600">
+                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                           </button>
+                         </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {adminTab === 'logos' && (
+                <div className="space-y-12">
+                   <div className="bg-gray-50 p-8 rounded-[2.5rem] border space-y-6">
+                     <h3 className="font-black text-gray-800 uppercase text-xs tracking-widest">Logo de Login</h3>
+                     <div className="flex items-center gap-8">
+                        <div className="w-32 h-32 bg-white border rounded-3xl flex items-center justify-center p-4">
+                           {settings.loginLogo ? <img src={settings.loginLogo} className="max-w-full" /> : <GearLogo />}
+                        </div>
+                        <div className="flex-1 space-y-3">
+                           <p className="text-xs text-gray-500">Esta logo aparecerá na tela de entrada do sistema.</p>
+                           <label className="inline-block bg-[#8B0000] text-white px-6 py-3 rounded-xl font-bold text-xs cursor-pointer hover:bg-red-800">
+                              ALTERAR LOGO LOGIN
+                              <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (base64) => updateSettings({ loginLogo: base64 }))} />
+                           </label>
+                        </div>
+                     </div>
+                   </div>
+
+                   <div className="bg-gray-50 p-8 rounded-[2.5rem] border space-y-6">
+                     <h3 className="font-black text-gray-800 uppercase text-xs tracking-widest">Logo da Loja (Header)</h3>
+                     <div className="flex items-center gap-8">
+                        <div className="w-32 h-32 bg-white border rounded-3xl flex items-center justify-center p-4">
+                           {settings.storeLogo ? <img src={settings.storeLogo} className="max-w-full" /> : <GearLogo />}
+                        </div>
+                        <div className="flex-1 space-y-3">
+                           <p className="text-xs text-gray-500">Esta logo aparecerá no topo da loja.</p>
+                           <label className="inline-block bg-[#8B0000] text-white px-6 py-3 rounded-xl font-bold text-xs cursor-pointer hover:bg-red-800">
+                              ALTERAR LOGO LOJA
+                              <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (base64) => updateSettings({ storeLogo: base64 }))} />
+                           </label>
+                        </div>
+                     </div>
+                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+
+      <nav className="bottom-nav-container">
+        <div 
+          onClick={() => setView('store')} 
+          className={`nav-item ${view === 'store' ? 'active' : 'inactive'}`}
+        >
+          <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+          </svg>
+          <span className="nav-label">LOJA</span>
+        </div>
+        
+        <div 
+          onClick={() => setView('profile')} 
+          className={`nav-item ${view === 'profile' ? 'active' : 'inactive'}`}
+        >
+          <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+          </svg>
+          <span className="nav-label">PERFIL</span>
+        </div>
+
+        {user.role === Role.ADMIN && (
+          <div 
+            onClick={() => { setAdminTab('orders'); setView('admin'); }} 
+            className={`nav-item ${view === 'admin' ? 'active' : 'inactive'}`}
+          >
+            <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>
+            </svg>
+            <span className="nav-label">ADMIN</span>
+          </div>
+        )}
+      </nav>
     </div>
   );
-};
+}
 
-export default App;
+function Login({ members, onLogin, settings }: { members: User[], onLogin: (u: User) => void, settings: SiteSettings }) {
+  const [email, setEmail] = useState('');
+  return (
+    <div className="min-h-screen bg-[#f3f4f6] flex items-center justify-center p-6">
+      <div className="w-full max-w-sm bg-white p-14 rounded-[4rem] card-shadow text-center flex flex-col items-center gap-10 border border-white">
+        <div className="w-24 h-24 bg-gray-50 rounded-[2.5rem] flex items-center justify-center border border-gray-100 p-2 shadow-inner">
+           {settings.loginLogo ? <img src={settings.loginLogo} className="max-w-[80%]" alt="Marca" /> : <GearLogo />}
+        </div>
+        <div>
+           <h1 className="text-3xl font-black text-gray-900 tracking-tighter">Mectria <span className="text-[#8B0000]">Store</span></h1>
+           <p className="text-[10px] font-black text-gray-400 mt-2 uppercase tracking-[0.6em]">Portal Staff</p>
+        </div>
+        
+        <div className="w-full space-y-6">
+           <input type="email" value={email} onChange={e => setEmail(e.target.value)} 
+             placeholder="usuario@mectria.com"
+             className="w-full px-8 py-5 bg-gray-50 rounded-3xl border-none outline-none text-gray-900 font-bold placeholder:text-gray-300 focus:ring-2 focus:ring-[#8B0000]/10 transition-all text-center" />
+           <button 
+             onClick={() => {
+               const normalizedEmail = email.trim().toLowerCase();
+               const m = members.find(u => u.email.toLowerCase() === normalizedEmail);
+               if (m) {
+                 const finalUser = normalizedEmail === ADMIN_EMAIL.toLowerCase() ? { ...m, role: Role.ADMIN } : m;
+                 onLogin(finalUser);
+               } else if (normalizedEmail === ADMIN_EMAIL.toLowerCase()) {
+                 onLogin({
+                   id: 'admin-root', name: 'Marcelo Admin', email: normalizedEmail,
+                   role: Role.ADMIN, clockifyId: 'Marcelo Admin', balance: 0, avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${normalizedEmail}`
+                 });
+               } else {
+                 alert("E-mail não autorizado.");
+               }
+             }} 
+             className="w-full py-6 bg-[#8B0000] text-white font-black rounded-3xl shadow-xl hover:bg-red-800 transition-all uppercase tracking-widest text-[11px]"
+           >
+              ENTRAR NA CONTA
+           </button>
+        </div>
+        <div className="w-full border-t border-gray-100 pt-8 mt-4">
+           <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest leading-relaxed text-center">
+             Uso exclusivo interno da Mectria. <br/>
+             <span className="opacity-50 text-center">v4.6 - Edição Corporativa</span>
+           </p>
+        </div>
+      </div>
+    </div>
+  );
+}
