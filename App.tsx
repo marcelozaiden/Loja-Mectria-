@@ -360,7 +360,7 @@ const AdminPanel: React.FC<{
   orders: Order[]; 
   branding: AppBranding; 
   onAction: (type: string, p: any) => void; 
-  onImportFile: (base64: string, mime: string) => Promise<void>; 
+  onImportFile: (base64: string, mime: string) => Promise<{ count: number, totalTokens: number } | null>; 
 }> = ({ members, products, orders, branding, onAction, onImportFile }) => {
   const [tab, setTab] = useState<'orders' | 'members' | 'products' | 'clockify' | 'branding'>('orders');
   const [loading, setLoading] = useState(false);
@@ -373,6 +373,19 @@ const AdminPanel: React.FC<{
   const [newProduct, setNewProduct] = useState({ name: '', price: 0, image: '' });
   const [balanceAdjustValue, setBalanceAdjustValue] = useState<number>(0);
   const [importSummary, setImportSummary] = useState<{ count: number, totalTokens: number } | null>(null);
+
+  const handleImport = async (base64: string, mime: string) => {
+    setLoading(true);
+    setImportSummary(null);
+    try {
+      const summary = await onImportFile(base64, mime);
+      if (summary) setImportSummary(summary);
+    } catch (error) {
+      alert("Erro ao importar CSV: " + (error instanceof Error ? error.message : "Arquivo inválido"));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="p-6 pb-32 max-w-4xl mx-auto space-y-8">
@@ -392,31 +405,45 @@ const AdminPanel: React.FC<{
           </div>
           
           {!importSummary ? (
-            <FileInput label="Relatório CSV" accept=".csv" onChange={async (b, m) => { 
-              setLoading(true); 
-              await onImportFile(b, m); 
-              setLoading(false); 
-            }} />
+            <FileInput label="Relatório CSV" accept=".csv" onChange={handleImport} />
           ) : (
-            <div className="bg-green-50 p-6 rounded-3xl border border-green-100 animate-in zoom-in-95">
-              <div className="text-green-600 mb-2">
-                <svg className="w-10 h-10 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
+            <div className="bg-green-50 p-8 rounded-[2.5rem] border border-green-100 animate-in zoom-in-95 duration-300">
+              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
               </div>
-              <p className="font-black text-[10px] uppercase tracking-widest text-green-700">Importação Concluída!</p>
-              <p className="text-sm font-bold text-green-600 mt-1">{importSummary.count} membros atualizados</p>
-              <Button onClick={() => setImportSummary(null)} variant="success" className="mt-4 px-8 text-[9px]">Nova Importação</Button>
+              <p className="font-black text-[12px] uppercase tracking-widest text-green-700">Importação Concluída!</p>
+              <div className="grid grid-cols-2 gap-4 mt-6">
+                <div className="bg-white p-4 rounded-2xl border border-green-100 shadow-sm">
+                   <p className="text-[10px] font-black text-slate-400 uppercase">Membros</p>
+                   <p className="text-xl font-black text-green-600">{importSummary.count}</p>
+                </div>
+                <div className="bg-white p-4 rounded-2xl border border-green-100 shadow-sm">
+                   <p className="text-[10px] font-black text-slate-400 uppercase">Tokens</p>
+                   <p className="text-xl font-black text-green-600">+{importSummary.totalTokens.toFixed(1)}</p>
+                </div>
+              </div>
+              <Button onClick={() => setImportSummary(null)} variant="success" className="mt-8 w-full py-4 text-[10px] font-black uppercase">Nova Importação</Button>
             </div>
           )}
           
-          {loading && <p className="text-[10px] font-black text-mectria-red animate-pulse">PROCESSANDO ARQUIVO...</p>}
-          <div className="pt-4 text-left p-6 bg-slate-50 rounded-2xl border border-dashed">
-             <h6 className="text-[9px] font-black uppercase text-slate-500 mb-2">Como funciona:</h6>
-             <ul className="text-[9px] font-bold text-slate-400 uppercase space-y-1">
-               <li>• O sistema lê a coluna "User" e "Duration"</li>
-               <li>• Multiplica horas totais por 0.4</li>
-               <li>• Soma o resultado ao saldo atual do membro</li>
-             </ul>
-          </div>
+          {loading && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <div className="w-12 h-12 border-4 border-slate-100 border-t-mectria-red rounded-full animate-spin"></div>
+              <p className="text-[10px] font-black text-mectria-red uppercase animate-pulse">Sincronizando com o banco...</p>
+            </div>
+          )}
+          
+          {!importSummary && !loading && (
+            <div className="pt-4 text-left p-6 bg-slate-50 rounded-2xl border border-dashed">
+               <h6 className="text-[9px] font-black uppercase text-slate-500 mb-2">Instruções:</h6>
+               <ul className="text-[9px] font-bold text-slate-400 uppercase space-y-2">
+                 <li>1. Vá ao Clockify &gt; Reports &gt; Summary</li>
+                 <li>2. Selecione o período desejado</li>
+                 <li>3. Clique em "Export" &gt; "Save as CSV"</li>
+                 <li>4. Suba o arquivo acima</li>
+               </ul>
+            </div>
+          )}
         </div>
       )}
 
@@ -683,22 +710,28 @@ const App: React.FC = () => {
                   const data = await parseClockifyReport(b, m);
                   const batch = writeBatch(db);
                   let count = 0;
+                  let totalTokens = 0;
+                  
                   data.forEach(entry => {
-                    // Tenta encontrar o membro pelo ID Clockify ou Nome exato
-                    const m = members.find(u => 
+                    const target = members.find(u => 
                       u.clockifyId?.toLowerCase() === entry.user.toLowerCase() || 
                       u.name.toLowerCase() === entry.user.toLowerCase() ||
                       u.name.toLowerCase().includes(entry.user.toLowerCase())
                     );
                     
-                    if (m) {
-                      batch.update(doc(db, "members", m.id), { balance: increment(entry.tokens) });
+                    if (target) {
+                      batch.update(doc(db, "members", target.id), { balance: increment(entry.tokens) });
                       count++;
+                      totalTokens += entry.tokens;
                     }
                   });
-                  await batch.commit();
-                  // Força um feedback visual
-                  alert(`Importação concluída: ${count} membros atualizados.`);
+                  
+                  if (count > 0) {
+                    await batch.commit();
+                    return { count, totalTokens };
+                  }
+                  
+                  throw new Error("Nenhum membro do arquivo foi encontrado no sistema. Verifique os IDs de Clockify.");
                 }} 
               />
             )}

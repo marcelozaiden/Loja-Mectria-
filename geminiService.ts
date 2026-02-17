@@ -1,92 +1,132 @@
+import { GoogleGenAI, Type } from "@google/genai";
 import { ClockifyData } from "../types";
 
 /**
- * Converte duração formatada do Clockify (HH:MM:SS ou decimal) em tokens.
+ * Processa um arquivo CSV do Clockify usando a API do Gemini.
+ * O modelo é capaz de identificar automaticamente colunas e converter durações para tokens.
  * Regra: 1h = 0.4 Tokens
- */
-function parseDurationToTokens(durationStr: string): number {
-  if (!durationStr) return 0;
-  
-  // Caso esteja em formato decimal (ex: 10.5)
-  if (!durationStr.includes(':')) {
-    const hours = parseFloat(durationStr.replace(',', '.'));
-    return isNaN(hours) ? 0 : hours * 0.4;
-  }
-
-  // Caso esteja em formato HH:MM:SS
-  const parts = durationStr.split(':');
-  const h = parseInt(parts[0]) || 0;
-  const m = parseInt(parts[1]) || 0;
-  const s = parseInt(parts[2]) || 0;
-
-  const totalHours = h + (m / 60) + (s / 3600);
-  return totalHours * 0.4;
-}
-
-/**
- * Processa um arquivo CSV do Clockify sem usar IA.
- * Identifica as colunas de Usuário e Duração automaticamente.
  */
 export async function parseClockifyReport(fileBase64: string, _mimeType: string): Promise<ClockifyData[]> {
   try {
-    // Decodifica o base64 para string
-    const base64Content = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
-    const csvContent = atob(base64Content);
+    // Inicializa o cliente Gemini usando a chave da variável de ambiente exclusiva process.env.API_KEY.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
-    // Divide por linhas e remove linhas vazias
+    // Decodifica o base64 para texto respeitando UTF-8 para suportar caracteres especiais em nomes.
+    const base64Content = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+    const binaryString = atob(base64Content);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const csvContent = new TextDecoder('utf-8').decode(bytes);
+
+    // Utilizamos o modelo gemini-3-pro-preview para tarefas complexas de extração de texto e raciocínio.
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: `Analise o conteúdo do CSV do Clockify abaixo.
+      Extraia o nome de cada usuário e calcule o total de tokens com base na duração total trabalhada.
+      Regra de conversão: 1 hora = 0.4 tokens.
+      Retorne um array JSON de objetos.
+      
+      Conteúdo do CSV:
+      ${csvContent}`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              user: { type: Type.STRING, description: "Nome exato do usuário conforme consta no CSV" },
+              tokens: { type: Type.NUMBER, description: "Total de tokens calculados (horas * 0.4)" }
+            },
+            required: ["user", "tokens"]
+          }
+        }
+      }
+    });
+
+    // Acessa a propriedade .text diretamente para obter a string de saída.
+    const jsonStr = response.text?.trim() || "[]";
+    const parsedData = JSON.parse(jsonStr);
+
+    // Mapeia os dados processados pela IA para o formato ClockifyData da aplicação.
+    return parsedData.map((item: any) => ({
+      user: item.user,
+      duration: "Processado por Gemini",
+      tokens: parseFloat(Number(item.tokens).toFixed(2))
+    }));
+  } catch (error) {
+    console.error("Erro ao processar CSV com Gemini, utilizando parser manual de fallback:", error);
+    return parseClockifyReportManual(fileBase64);
+  }
+}
+
+/**
+ * Parser manual resiliente utilizado como fallback para a extração de dados do CSV.
+ */
+function parseClockifyReportManual(fileBase64: string): ClockifyData[] {
+  try {
+    const base64Content = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+    const binaryString = atob(base64Content);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const csvContent = new TextDecoder('utf-8').decode(bytes);
+    
     const lines = csvContent.split(/\r?\n/).filter(line => line.trim() !== "");
     if (lines.length < 2) return [];
 
-    // Tenta identificar o separador (vírgula ou ponto-e-vírgula)
     const header = lines[0];
     const separator = header.includes(';') ? ';' : ',';
     const columns = header.split(separator).map(c => c.replace(/"/g, '').trim().toLowerCase());
 
-    // Localiza os índices das colunas necessárias
-    // O Clockify exporta como "User" ou "Usuário" e "Duration" ou "Duração"
     const userIdx = columns.findIndex(c => c.includes('user') || c.includes('usuário') || c.includes('nome'));
     const durationIdx = columns.findIndex(c => c.includes('duration') || c.includes('duração') || c.includes('time'));
 
-    if (userIdx === -1 || durationIdx === -1) {
-      console.error("Colunas não encontradas no CSV. Certifique-se de exportar o relatório do Clockify.");
-      return [];
-    }
+    if (userIdx === -1 || durationIdx === -1) return [];
 
     const results: ClockifyData[] = [];
-
-    // Processa os dados (pula o cabeçalho)
     for (let i = 1; i < lines.length; i++) {
-      const cells = lines[i].split(separator).map(c => c.replace(/"/g, '').trim());
+      const row = lines[i];
+      const regex = new RegExp(`${separator}(?=(?:(?:[^"]*"){2})*[^"]*$)`);
+      const cells = row.split(regex).map(c => c.replace(/"/g, '').trim());
+      
       const userName = cells[userIdx];
       const duration = cells[durationIdx];
 
       if (userName && duration) {
-        const tokens = parseDurationToTokens(duration);
+        let h = 0;
+        if (duration.includes(':')) {
+          const p = duration.split(':');
+          h = (parseInt(p[0]) || 0) + (parseInt(p[1]) || 0) / 60 + (parseInt(p[2] || "0")) / 3600;
+        } else {
+          h = parseFloat(duration.replace(',', '.'));
+        }
         results.push({
           user: userName,
           duration: duration,
-          tokens: parseFloat(tokens.toFixed(2))
+          tokens: h * 0.4
         });
       }
     }
 
-    // Agrupa resultados por usuário (caso haja múltiplas entradas no CSV)
-    const grouped = results.reduce((acc, curr) => {
-      const existing = acc.find(item => item.user === curr.user);
+    const groupedMap = new Map<string, ClockifyData>();
+    results.forEach(item => {
+      const existing = groupedMap.get(item.user);
       if (existing) {
-        existing.tokens += curr.user === curr.user ? curr.tokens : 0;
+        existing.tokens = existing.tokens + item.tokens;
       } else {
-        acc.push(curr);
+        groupedMap.set(item.user, { ...item });
       }
-      return acc;
-    }, [] as ClockifyData[]);
+    });
 
-    return grouped;
-  } catch (error) {
-    console.error("Erro ao processar CSV:", error);
+    return Array.from(groupedMap.values()).map(item => ({
+      ...item,
+      tokens: parseFloat(item.tokens.toFixed(2))
+    }));
+  } catch (e) {
     return [];
   }
 }
-
-// Mantendo a assinatura antiga para compatibilidade, mas removendo a chamada da IA.
-// A função acima agora lida com tudo de forma determinística.
