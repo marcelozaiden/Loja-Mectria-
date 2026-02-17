@@ -1,0 +1,7 @@
+{
+  "name": "Mectria Store",
+  "description": "App corporativo para conversão de horas de trabalho (Clockify) em tokens e troca por produtos exclusivos da Mectria.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
