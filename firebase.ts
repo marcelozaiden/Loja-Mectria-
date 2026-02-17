@@ -1,4 +1,5 @@
-import * as FirebaseApp from "firebase/app";
+import { initializeApp } from "firebase/app";
+import { getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
 // Configuração única do projeto Mectria Store
@@ -12,11 +13,11 @@ const firebaseConfig = {
   measurementId: "G-JBK19V6HME"
 };
 
-// Use namespaced access for Firebase App members to resolve export identification issues in specific build environments.
-// We verify existing app instances to prevent re-initialization errors during Hot Module Replacement (HMR).
-const app = FirebaseApp.getApps().length === 0 
-  ? FirebaseApp.initializeApp(firebaseConfig) 
-  : FirebaseApp.getApp();
+// Fix: Split imports from 'firebase/app' to help TypeScript compiler resolve named members 'initializeApp', 'getApps', and 'getApp'.
+// This ensures the modular (v9+) syntax is properly identified even in environments with restrictive type resolution.
+const app = getApps().length === 0 
+  ? initializeApp(firebaseConfig) 
+  : getApp();
 
 // Exporta o banco de dados para uso em toda a aplicação seguindo o padrão modular v9.
 export const db = getFirestore(app);

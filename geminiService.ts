@@ -1,72 +1,38 @@
-import { GoogleGenAI, Type } from "@google/genai";
+
 import { ClockifyData } from "../types";
 
 /**
- * Processa um arquivo CSV do Clockify usando a API do Gemini.
- * O modelo é capaz de identificar automaticamente colunas e converter durações para tokens.
+ * Converte duração formatada do Clockify (HH:MM:SS ou decimal) em tokens.
  * Regra: 1h = 0.4 Tokens
  */
-export async function parseClockifyReport(fileBase64: string, _mimeType: string): Promise<ClockifyData[]> {
-  try {
-    // Inicializa o cliente Gemini usando a chave da variável de ambiente exclusiva process.env.API_KEY.
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
-    // Decodifica o base64 para texto respeitando UTF-8 para suportar caracteres especiais em nomes.
-    const base64Content = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
-    const binaryString = atob(base64Content);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    const csvContent = new TextDecoder('utf-8').decode(bytes);
-
-    // Utilizamos o modelo gemini-3-pro-preview para tarefas complexas de extração de texto e raciocínio.
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
-      contents: `Analise o conteúdo do CSV do Clockify abaixo.
-      Extraia o nome de cada usuário e calcule o total de tokens com base na duração total trabalhada.
-      Regra de conversão: 1 hora = 0.4 tokens.
-      Retorne um array JSON de objetos.
-      
-      Conteúdo do CSV:
-      ${csvContent}`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              user: { type: Type.STRING, description: "Nome exato do usuário conforme consta no CSV" },
-              tokens: { type: Type.NUMBER, description: "Total de tokens calculados (horas * 0.4)" }
-            },
-            required: ["user", "tokens"]
-          }
-        }
-      }
-    });
-
-    // Acessa a propriedade .text diretamente para obter a string de saída.
-    const jsonStr = response.text?.trim() || "[]";
-    const parsedData = JSON.parse(jsonStr);
-
-    // Mapeia os dados processados pela IA para o formato ClockifyData da aplicação.
-    return parsedData.map((item: any) => ({
-      user: item.user,
-      duration: "Processado por Gemini",
-      tokens: parseFloat(Number(item.tokens).toFixed(2))
-    }));
-  } catch (error) {
-    console.error("Erro ao processar CSV com Gemini, utilizando parser manual de fallback:", error);
-    return parseClockifyReportManual(fileBase64);
+function parseDurationToTokens(durationStr: string): number {
+  if (!durationStr) return 0;
+  
+  const cleanStr = durationStr.replace(/"/g, '').trim();
+  
+  // Caso esteja em formato decimal (ex: 10.5)
+  if (!cleanStr.includes(':')) {
+    const hours = parseFloat(cleanStr.replace(',', '.'));
+    return isNaN(hours) ? 0 : hours * 0.4;
   }
+
+  // Caso esteja em formato HH:MM:SS ou HH:MM
+  const parts = cleanStr.split(':');
+  const h = parseInt(parts[0]) || 0;
+  const m = parseInt(parts[1]) || 0;
+  const s = parts[2] ? parseInt(parts[2]) : 0;
+
+  const totalHours = h + (m / 60) + (s / 3600);
+  return totalHours * 0.4;
 }
 
 /**
- * Parser manual resiliente utilizado como fallback para a extração de dados do CSV.
+ * Processa um arquivo CSV do Clockify localmente no navegador.
+ * Resolve o erro de "API Key must be set" ao eliminar a dependência de IA externa.
  */
-function parseClockifyReportManual(fileBase64: string): ClockifyData[] {
+export async function parseClockifyReport(fileBase64: string, _mimeType: string): Promise<ClockifyData[]> {
   try {
+    // Decodifica o base64 respeitando UTF-8 (acentos)
     const base64Content = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
     const binaryString = atob(base64Content);
     const bytes = new Uint8Array(binaryString.length);
@@ -85,11 +51,15 @@ function parseClockifyReportManual(fileBase64: string): ClockifyData[] {
     const userIdx = columns.findIndex(c => c.includes('user') || c.includes('usuário') || c.includes('nome'));
     const durationIdx = columns.findIndex(c => c.includes('duration') || c.includes('duração') || c.includes('time'));
 
-    if (userIdx === -1 || durationIdx === -1) return [];
+    if (userIdx === -1 || durationIdx === -1) {
+      throw new Error("Colunas 'User' e 'Duration' não encontradas no CSV. Certifique-se de exportar o relatório 'Summary' como CSV no Clockify.");
+    }
 
-    const results: ClockifyData[] = [];
+    const groupedMap = new Map<string, number>();
+
     for (let i = 1; i < lines.length; i++) {
       const row = lines[i];
+      // Regex para splitar CSV lidando com aspas que podem conter o separador
       const regex = new RegExp(`${separator}(?=(?:(?:[^"]*"){2})*[^"]*$)`);
       const cells = row.split(regex).map(c => c.replace(/"/g, '').trim());
       
@@ -97,36 +67,19 @@ function parseClockifyReportManual(fileBase64: string): ClockifyData[] {
       const duration = cells[durationIdx];
 
       if (userName && duration) {
-        let h = 0;
-        if (duration.includes(':')) {
-          const p = duration.split(':');
-          h = (parseInt(p[0]) || 0) + (parseInt(p[1]) || 0) / 60 + (parseInt(p[2] || "0")) / 3600;
-        } else {
-          h = parseFloat(duration.replace(',', '.'));
-        }
-        results.push({
-          user: userName,
-          duration: duration,
-          tokens: h * 0.4
-        });
+        const tokens = parseDurationToTokens(duration);
+        const currentTokens = groupedMap.get(userName) || 0;
+        groupedMap.set(userName, currentTokens + tokens);
       }
     }
 
-    const groupedMap = new Map<string, ClockifyData>();
-    results.forEach(item => {
-      const existing = groupedMap.get(item.user);
-      if (existing) {
-        existing.tokens = existing.tokens + item.tokens;
-      } else {
-        groupedMap.set(item.user, { ...item });
-      }
-    });
-
-    return Array.from(groupedMap.values()).map(item => ({
-      ...item,
-      tokens: parseFloat(item.tokens.toFixed(2))
+    return Array.from(groupedMap.entries()).map(([user, tokens]) => ({
+      user,
+      duration: "Calculado Localmente",
+      tokens: parseFloat(tokens.toFixed(2))
     }));
-  } catch (e) {
-    return [];
+  } catch (error) {
+    console.error("Erro no processador local:", error);
+    throw error;
   }
 }

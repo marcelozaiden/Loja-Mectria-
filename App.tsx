@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   User, 
@@ -224,6 +225,7 @@ const FileInput: React.FC<{
           const reader = new FileReader();
           reader.readAsDataURL(file);
           reader.onload = () => { onChange(reader.result as string, file.type); setLoading(false); };
+          reader.onerror = () => setLoading(false);
         }
       }} className="hidden" id={`file-${label.replace(/\s+/g, '-').toLowerCase()}`} />
       <label htmlFor={`file-${label.replace(/\s+/g, '-').toLowerCase()}`} className="flex flex-col items-center justify-center gap-2 px-4 py-6 rounded-[2rem] border-2 border-dashed border-slate-200 hover:border-mectria-red cursor-pointer text-xs font-bold text-slate-400 bg-slate-50/50 transition-all overflow-hidden">
@@ -383,6 +385,7 @@ const AdminPanel: React.FC<{
     } catch (error) {
       alert("Erro ao importar CSV: " + (error instanceof Error ? error.message : "Arquivo inválido"));
     } finally {
+      // GARANTE que o loading pare mesmo se der erro
       setLoading(false);
     }
   };
@@ -401,12 +404,14 @@ const AdminPanel: React.FC<{
         <div className="bg-white p-12 rounded-[3.5rem] border shadow-sm text-center space-y-8">
           <div>
             <h4 className="font-black uppercase text-lg text-slate-800 tracking-tight">Importar Clockify</h4>
-            <p className="text-[10px] font-bold text-slate-400 uppercase mt-2">Exporte o relatório resumido como CSV no Clockify</p>
+            <p className="text-[10px] font-bold text-slate-400 uppercase mt-2">Processamento local instantâneo</p>
           </div>
           
-          {!importSummary ? (
+          {!importSummary && !loading && (
             <FileInput label="Relatório CSV" accept=".csv" onChange={handleImport} />
-          ) : (
+          )}
+          
+          {importSummary && (
             <div className="bg-green-50 p-8 rounded-[2.5rem] border border-green-100 animate-in zoom-in-95 duration-300">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>
@@ -429,7 +434,7 @@ const AdminPanel: React.FC<{
           {loading && (
             <div className="flex flex-col items-center gap-4 py-8">
               <div className="w-12 h-12 border-4 border-slate-100 border-t-mectria-red rounded-full animate-spin"></div>
-              <p className="text-[10px] font-black text-mectria-red uppercase animate-pulse">Sincronizando com o banco...</p>
+              <p className="text-[10px] font-black text-mectria-red uppercase animate-pulse">Processando arquivo localmente...</p>
             </div>
           )}
           
@@ -437,10 +442,9 @@ const AdminPanel: React.FC<{
             <div className="pt-4 text-left p-6 bg-slate-50 rounded-2xl border border-dashed">
                <h6 className="text-[9px] font-black uppercase text-slate-500 mb-2">Instruções:</h6>
                <ul className="text-[9px] font-bold text-slate-400 uppercase space-y-2">
-                 <li>1. Vá ao Clockify &gt; Reports &gt; Summary</li>
-                 <li>2. Selecione o período desejado</li>
-                 <li>3. Clique em "Export" &gt; "Save as CSV"</li>
-                 <li>4. Suba o arquivo acima</li>
+                 <li>1. Vá ao Clockify > Reports > Summary</li>
+                 <li>2. Clique em "Export" > "Save as CSV"</li>
+                 <li>3. Suba o arquivo acima</li>
                </ul>
             </div>
           )}
@@ -713,10 +717,11 @@ const App: React.FC = () => {
                   let totalTokens = 0;
                   
                   data.forEach(entry => {
+                    // Busca resiliente por nome exato ou ID de clockify
                     const target = members.find(u => 
-                      u.clockifyId?.toLowerCase() === entry.user.toLowerCase() || 
-                      u.name.toLowerCase() === entry.user.toLowerCase() ||
-                      u.name.toLowerCase().includes(entry.user.toLowerCase())
+                      u.clockifyId?.trim().toLowerCase() === entry.user.trim().toLowerCase() || 
+                      u.name.trim().toLowerCase() === entry.user.trim().toLowerCase() ||
+                      u.name.trim().toLowerCase().includes(entry.user.trim().toLowerCase())
                     );
                     
                     if (target) {
@@ -731,7 +736,7 @@ const App: React.FC = () => {
                     return { count, totalTokens };
                   }
                   
-                  throw new Error("Nenhum membro do arquivo foi encontrado no sistema. Verifique os IDs de Clockify.");
+                  throw new Error("Nenhum membro do arquivo foi encontrado no sistema. Verifique os nomes cadastrados no time.");
                 }} 
               />
             )}
