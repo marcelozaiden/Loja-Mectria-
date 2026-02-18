@@ -36,9 +36,16 @@ const compressImage = (base64Str: string, maxWidth = 400): Promise<string> => {
       canvas.width = maxWidth;
       canvas.height = img.height * scale;
       const ctx = canvas.getContext('2d');
-      ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.7));
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.8));
+      } else {
+        resolve(base64Str);
+      }
     };
+    img.onerror = () => resolve(base64Str);
   });
 };
 
@@ -239,6 +246,7 @@ export default function App() {
   const [adjAmounts, setAdjAmounts] = useState<{[key: string]: string}>({});
   
   const [tempAvatar, setTempAvatar] = useState<string | null>(null);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [isSavingAvatar, setIsSavingAvatar] = useState(false);
 
   useEffect(() => {
@@ -260,7 +268,6 @@ export default function App() {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as User));
       setMembers(data);
       
-      // Persistência de Sessão
       const storedEmail = localStorage.getItem('mectria_user_email');
       
       if (storedEmail && !user) {
@@ -273,7 +280,10 @@ export default function App() {
         const updated = data.find(m => m.id === user.id);
         if (updated) {
           const finalUser = updated.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? { ...updated, role: Role.ADMIN } : updated;
-          setUser(finalUser);
+          setUser(prev => {
+            if (JSON.stringify(prev) !== JSON.stringify(finalUser)) return finalUser;
+            return prev;
+          });
         }
       }
       setLoading(false);
@@ -312,8 +322,8 @@ export default function App() {
     if ('balance' in cleanData && typeof cleanData.balance === 'number') {
       cleanData.balance = Math.ceil(cleanData.balance);
     }
-    // setDoc com merge: true garante que salve mesmo que o registro esteja incompleto
-    await setDoc(doc(db, "members", uId), cleanData, { merge: true });
+    const memberRef = doc(db, "members", uId);
+    await setDoc(memberRef, cleanData, { merge: true });
   };
 
   const handleSaveAvatar = async () => {
@@ -321,11 +331,13 @@ export default function App() {
       setIsSavingAvatar(true);
       try {
         const compressed = await compressImage(tempAvatar);
+        // Garantir que estamos salvando no documento do usuário logado
         await handleUpdateUser(user.id, { avatar: compressed });
         setTempAvatar(null);
-        alert("Foto de perfil salva permanentemente!");
+        alert("Sua nova foto foi salva com sucesso no sistema!");
       } catch (err: any) {
-        alert("Erro ao salvar foto: " + err.message);
+        console.error("Erro ao salvar avatar:", err);
+        alert("Ocorreu um erro ao salvar a imagem. Tente novamente.");
       } finally {
         setIsSavingAvatar(false);
       }
@@ -430,8 +442,16 @@ export default function App() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, callback: (res: any) => void) => {
     const file = e.target.files?.[0];
     if (file) {
+      setIsProcessingImage(true);
       const reader = new FileReader();
-      reader.onloadend = () => callback(reader.result);
+      reader.onloadend = () => {
+        callback(reader.result);
+        setIsProcessingImage(false);
+      };
+      reader.onerror = () => {
+        alert("Falha ao ler o arquivo.");
+        setIsProcessingImage(false);
+      };
       reader.readAsDataURL(file);
     }
   };
@@ -533,20 +553,54 @@ export default function App() {
                {isMemberOfMonth && <LegendaryEmbers />}
                <h2 className={`text-xs font-black uppercase tracking-[0.4em] ${isMemberOfMonth ? 'text-white/60' : 'text-gray-400'} mb-10 z-10 relative`}>Meu Perfil</h2>
                
-               <div className="relative inline-block mb-6 group z-10">
-                  <img src={tempAvatar || user.avatar} className={`w-40 h-40 rounded-[2.5rem] mx-auto border-4 border-white shadow-xl object-cover ${isMemberOfMonth ? 'legendary-avatar' : ''}`} alt="Avatar" />
+               <div className="relative inline-block mb-10 group z-10">
+                  <div className="relative">
+                    <img 
+                      src={tempAvatar || user.avatar} 
+                      className={`w-40 h-40 rounded-[2.5rem] mx-auto border-4 border-white shadow-xl object-cover transition-opacity ${isProcessingImage ? 'opacity-30' : 'opacity-100'} ${isMemberOfMonth ? 'legendary-avatar' : ''}`} 
+                      alt="Avatar" 
+                    />
+                    {isProcessingImage && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="w-8 h-8 border-4 border-[#8B0000] border-t-transparent rounded-full animate-spin"></div>
+                      </div>
+                    )}
+                  </div>
                   <label className="absolute inset-0 bg-black/40 rounded-[2.5rem] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
-                    <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    <div className="text-center">
+                      <svg className="w-8 h-8 text-white mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                      <span className="text-[10px] text-white font-black uppercase">Alterar Foto</span>
+                    </div>
                     <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (res) => setTempAvatar(res))} />
                   </label>
                </div>
 
-               {tempAvatar && (
-                 <div className="z-10 relative mb-8 flex justify-center gap-4 animate-fade-in">
-                    <Button variant="success" onClick={handleSaveAvatar} disabled={isSavingAvatar} className="px-10 py-3 shadow-lg">
-                      {isSavingAvatar ? "SALVANDO..." : "SALVAR FOTO PERMANENTE"}
+               {tempAvatar && !isProcessingImage && (
+                 <div className="z-[20] relative mb-10 flex flex-col gap-3 animate-fade-in px-4">
+                    <Button 
+                      variant="success" 
+                      onClick={handleSaveAvatar} 
+                      disabled={isSavingAvatar} 
+                      className="w-full py-5 shadow-xl text-md flex items-center justify-center gap-3"
+                    >
+                      {isSavingAvatar ? (
+                        <>
+                          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          SALVANDO...
+                        </>
+                      ) : (
+                        "SALVAR FOTO PERMANENTE ★"
+                      )}
                     </Button>
-                    <Button variant="outline" onClick={() => setTempAvatar(null)} disabled={isSavingAvatar} className="px-10 py-3">CANCELAR</Button>
+                    <Button 
+                      variant="outline" 
+                      onClick={() => setTempAvatar(null)} 
+                      disabled={isSavingAvatar} 
+                      className="w-full py-3"
+                    >
+                      CANCELAR
+                    </Button>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase mt-2 italic">A nova foto será aplicada em todo o sistema após salvar.</p>
                  </div>
                )}
 
