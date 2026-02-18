@@ -1,8 +1,10 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { ClockifyData } from "../types";
 
 /**
  * Processa o relatório CSV do Clockify diretamente no frontend usando Gemini.
+ * Garante que a conversão de horas (1h = 0.4 TK) seja sempre arredondada para cima para o próximo inteiro.
  */
 export async function parseClockifyReport(fileBase64: string, _mimeType: string): Promise<ClockifyData[]> {
   try {
@@ -19,16 +21,20 @@ export async function parseClockifyReport(fileBase64: string, _mimeType: string)
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Você é um assistente financeiro especializado em Clockify. 
-      Analise o relatório CSV abaixo.
-      Extraia o nome de cada usuário e sua duração total.
-      Converta a duração para tokens (taxa: 1 hora = 0.4 TK).
-      Ignore linhas de cabeçalho ou totais gerais.
+      contents: `Você é um assistente financeiro da Mectria. 
+      Analise o relatório CSV do Clockify abaixo.
+      Extraia: Nome do Usuário, Duração Total (HH:MM:SS).
+      
+      REGRA DE CONVERSÃO:
+      1. Converta a duração total para horas decimais.
+      2. Multiplique por 0.4 para obter os tokens.
+      3. ARREDONDE SEMPRE PARA CIMA (CEIL) para o número inteiro mais próximo.
+         Exemplo: 0.1 tokens -> 1 token. 10.01 tokens -> 11 tokens.
+      
+      Retorne APENAS um array JSON de objetos. Ignore cabeçalhos e totais do CSV.
       
       CSV:
-      ${csvText}
-      
-      Retorne um array JSON.`,
+      ${csvText}`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -36,9 +42,9 @@ export async function parseClockifyReport(fileBase64: string, _mimeType: string)
           items: {
             type: Type.OBJECT,
             properties: {
-              user: { type: Type.STRING, description: "Nome do usuário conforme consta no Clockify" },
-              duration: { type: Type.STRING, description: "Duração formatada (ex: 08:30:00)" },
-              tokens: { type: Type.NUMBER, description: "Valor em tokens (Horas decimais * 0.4)" },
+              user: { type: Type.STRING, description: "Nome exato do usuário no Clockify" },
+              duration: { type: Type.STRING, description: "Duração no formato HH:MM:SS" },
+              tokens: { type: Type.INTEGER, description: "Quantidade de tokens (inteiro arredondado para cima)" },
             },
             required: ["user", "duration", "tokens"],
           },
@@ -49,7 +55,13 @@ export async function parseClockifyReport(fileBase64: string, _mimeType: string)
     const text = response.text;
     if (!text) throw new Error("A IA não retornou dados.");
     
-    return JSON.parse(text.trim());
+    const data: ClockifyData[] = JSON.parse(text.trim());
+    
+    // Camada extra de segurança no frontend para garantir inteiros arredondados para cima
+    return data.map(item => ({
+      ...item,
+      tokens: Math.ceil(item.tokens)
+    }));
   } catch (error: any) {
     console.error("Erro no processamento Gemini:", error);
     throw new Error(error.message || "Erro ao processar arquivo com IA.");

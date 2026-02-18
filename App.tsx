@@ -5,9 +5,42 @@ import { GearLogo, ADMIN_EMAIL, INITIAL_MEMBERS, INITIAL_PRODUCTS } from './cons
 import { db } from './firebase';
 import { 
   collection, onSnapshot, doc, query, orderBy, writeBatch, 
-  increment, getDocs, updateDoc, setDoc, deleteDoc 
+  getDocs, updateDoc, setDoc, deleteDoc 
 } from "firebase/firestore";
-import { parseClockifyReport } from './services/geminiService';
+import { parseClockifyPdf } from './services/clockifyPdfService';
+
+// --- Utilitários ---
+const formatBalance = (val: any): number => {
+  const num = Number(val);
+  return isNaN(num) ? 0 : Math.floor(num);
+};
+
+function normalizeStr(str: string): string {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Redimensiona imagem para evitar estouro de limite do Firestore (1MB)
+const compressImage = (base64Str: string, maxWidth = 400): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = base64Str;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const scale = maxWidth / img.width;
+      canvas.width = maxWidth;
+      canvas.height = img.height * scale;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.7));
+    };
+  });
+};
 
 // --- Componentes de UI ---
 const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, type = "button" }: any) => {
@@ -71,18 +104,37 @@ const ImportModal = ({ isOpen, onClose, onImport, members }: { isOpen: boolean, 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
     setIsProcessing(true);
+    setPreviewData([]);
+
     try {
       const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = reader.result as string;
-        const result = await parseClockifyReport(base64, file.type);
-        setPreviewData(result);
+      reader.onerror = () => {
+        alert("Erro ao ler arquivo físico.");
         setIsProcessing(false);
       };
-      reader.readAsDataURL(file);
+      
+      reader.onload = async () => {
+        try {
+          const arrayBuffer = reader.result as ArrayBuffer;
+          const result = await parseClockifyPdf(arrayBuffer, members);
+          if (result.length === 0) {
+            alert("Nenhum dado compatível encontrado no PDF. Verifique se é um 'Detailed Report' do Clockify.");
+          }
+          setPreviewData(result);
+        } catch (err: any) {
+          console.error("Erro no processamento:", err);
+          alert("Erro ao analisar conteúdo do PDF: " + err.message);
+        } finally {
+          setIsProcessing(false);
+          e.target.value = '';
+        }
+      };
+      
+      reader.readAsArrayBuffer(file);
     } catch (err: any) {
-      alert(err.message);
+      alert("Erro na abertura do leitor: " + err.message);
       setIsProcessing(false);
     }
   };
@@ -91,45 +143,63 @@ const ImportModal = ({ isOpen, onClose, onImport, members }: { isOpen: boolean, 
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <div className="bg-white rounded-[2.5rem] w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden animate-fade-in">
-        <div className="p-8 border-b flex justify-between items-center">
-          <h2 className="text-xl font-black uppercase">Importar Horas (Clockify)</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-black">✕</button>
+      <div className="bg-white rounded-[2.5rem] w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden animate-fade-in shadow-2xl">
+        <div className="p-8 border-b flex justify-between items-center bg-gray-50">
+          <div>
+            <h2 className="text-xl font-black uppercase">Importar PDF (Clockify)</h2>
+            <p className="text-[10px] font-bold text-gray-400 mt-1">SISTEMA AUTOMÁTICO • TAXA 0.4 TK/H</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-black transition-colors">✕</button>
         </div>
         <div className="p-8 overflow-y-auto flex-1">
           {!previewData.length ? (
             <div className="text-center py-12">
-              <label className={`cursor-pointer inline-block px-10 py-6 rounded-3xl border-2 border-dashed border-gray-200 hover:border-[#8B0000] transition-colors ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
+              <label className={`cursor-pointer group inline-block px-12 py-10 rounded-[3rem] border-4 border-dashed border-gray-100 hover:border-[#8B0000]/30 hover:bg-red-50/30 transition-all ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
                 {isProcessing ? (
                   <div className="flex flex-col items-center gap-4">
-                    <div className="w-8 h-8 border-4 border-[#8B0000] border-t-transparent rounded-full animate-spin"></div>
-                    <p className="text-sm font-black text-gray-400 uppercase">A IA está processando o CSV...</p>
+                    <div className="w-10 h-10 border-4 border-[#8B0000] border-t-transparent rounded-full animate-spin"></div>
+                    <p className="text-sm font-black text-[#8B0000] uppercase tracking-widest">Analisando Relatório...</p>
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center gap-4">
-                    <svg className="w-12 h-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-                    <p className="text-sm font-black text-gray-400 uppercase">Selecionar Relatório CSV</p>
+                  <div className="flex flex-col items-center gap-6">
+                    <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
+                       <svg className="w-10 h-10 text-gray-300 group-hover:text-[#8B0000]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-gray-800 uppercase tracking-widest">Selecionar PDF Detalhado</p>
+                      <p className="text-[10px] font-bold text-gray-400 mt-2">Clique para buscar o arquivo do Clockify</p>
+                    </div>
                   </div>
                 )}
-                <input type="file" accept=".csv" className="hidden" onChange={handleFile} disabled={isProcessing} />
+                <input type="file" accept=".pdf" className="hidden" onChange={handleFile} disabled={isProcessing} />
               </label>
             </div>
           ) : (
-            <div className="space-y-4">
-              <p className="text-xs font-bold text-gray-400 uppercase mb-4">Prévia da Conversão (Taxa 0.4 TK/h - Arredondado p/ Cima)</p>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between mb-6 px-2">
+                 <p className="text-xs font-black text-gray-400 uppercase tracking-widest">Relatório de Créditos</p>
+                 <span className="bg-green-100 text-green-700 text-[9px] font-black px-3 py-1 rounded-full uppercase">{previewData.length} Membros Detectados</span>
+              </div>
               {previewData.map((d, i) => {
-                const member = members.find(m => m.name.toLowerCase().includes(d.user.toLowerCase()));
+                const normalizedUser = normalizeStr(d.user);
+                const member = members.find(m => 
+                  normalizeStr(m.clockifyId).includes(normalizedUser) || 
+                  normalizeStr(m.name).includes(normalizedUser) ||
+                  normalizedUser.includes(normalizeStr(m.clockifyId)) ||
+                  normalizedUser.includes(normalizeStr(m.name))
+                );
+
                 return (
-                  <div key={i} className={`p-4 rounded-2xl flex items-center justify-between ${member ? 'bg-gray-50' : 'bg-red-50 opacity-60'}`}>
-                    <div className="flex items-center gap-3">
-                      <div className={`w-2 h-2 rounded-full ${member ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                  <div key={i} className={`p-5 rounded-3xl flex items-center justify-between border transition-all ${member ? 'bg-white border-gray-100 shadow-sm' : 'bg-red-50 border-red-100 opacity-60'}`}>
+                    <div className="flex items-center gap-4">
+                      <div className={`w-3 h-3 rounded-full ${member ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`}></div>
                       <div>
-                        <p className="text-sm font-black uppercase">{d.user}</p>
-                        <p className="text-[10px] font-bold text-gray-400">{d.duration} • {member ? 'Membro Identificado' : 'Não encontrado'}</p>
+                        <p className="text-sm font-black text-gray-900 uppercase tracking-tight">{member ? member.name : d.user}</p>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase">Tempo: {d.duration} • ID: {d.user}</p>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-lg font-black text-[#8B0000]">{d.tokens} TK</p>
+                    <div className="bg-gray-50 px-4 py-2 rounded-2xl border border-gray-100">
+                      <p className="text-lg font-black text-[#8B0000] tabular-nums">{d.tokens} <span className="text-[10px] opacity-60">TK</span></p>
                     </div>
                   </div>
                 );
@@ -137,9 +207,9 @@ const ImportModal = ({ isOpen, onClose, onImport, members }: { isOpen: boolean, 
             </div>
           )}
         </div>
-        <div className="p-8 border-t bg-gray-50 flex gap-4">
-          <Button variant="outline" className="flex-1" onClick={() => setPreviewData([])}>LIMPAR</Button>
-          <Button className="flex-1" disabled={!previewData.length || isProcessing} onClick={() => onImport(previewData)}>CONFIRMAR E CREDITAR</Button>
+        <div className="p-8 border-t bg-white flex gap-4">
+          <Button variant="outline" className="flex-1 py-4" onClick={() => setPreviewData([])}>LIMPAR</Button>
+          <Button className="flex-1 py-4 shadow-xl" disabled={!previewData.length || isProcessing} onClick={() => onImport(previewData)}>CONFIRMAR E CREDITAR</Button>
         </div>
       </div>
     </div>
@@ -167,6 +237,9 @@ export default function App() {
 
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [adjAmounts, setAdjAmounts] = useState<{[key: string]: string}>({});
+  
+  const [tempAvatar, setTempAvatar] = useState<string | null>(null);
+  const [isSavingAvatar, setIsSavingAvatar] = useState(false);
 
   useEffect(() => {
     async function init() {
@@ -186,7 +259,17 @@ export default function App() {
     const unsubMembers = onSnapshot(collection(db, "members"), (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as User));
       setMembers(data);
-      if (user) {
+      
+      // Persistência de Sessão
+      const storedEmail = localStorage.getItem('mectria_user_email');
+      
+      if (storedEmail && !user) {
+        const found = data.find(m => m.email.toLowerCase() === storedEmail.toLowerCase());
+        if (found) {
+          const finalUser = found.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? { ...found, role: Role.ADMIN } : found;
+          setUser(finalUser);
+        }
+      } else if (user) {
         const updated = data.find(m => m.id === user.id);
         if (updated) {
           const finalUser = updated.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? { ...updated, role: Role.ADMIN } : updated;
@@ -206,29 +289,53 @@ export default function App() {
   }, [user?.id]);
 
   const handleBuy = async (p: Product) => {
-    // Garante que o saldo seja tratado como inteiro para segurança
-    const userBalance = Math.floor(user?.balance || 0);
+    const userBalance = formatBalance(user?.balance);
     if (!user || userBalance < p.price) return;
     try {
       const batch = writeBatch(db);
       const orderRef = doc(collection(db, "orders"));
+      const newBalance = userBalance - p.price;
+      
       batch.set(orderRef, {
         userId: user.id, userName: user.name, productId: p.id, productName: p.name,
         price: p.price, status: OrderStatus.PENDING, date: new Date().toLocaleDateString('pt-BR'),
         timestamp: Date.now()
       });
-      batch.update(doc(db, "members", user.id), { balance: increment(-p.price) });
+      batch.update(doc(db, "members", user.id), { balance: newBalance });
       await batch.commit();
       alert("Resgate realizado com sucesso!");
     } catch (e: any) { alert(e.message); }
   };
 
-  const handleUpdateUser = async (uId: string, data: Partial<User>) => {
-    // Se o balanço for atualizado, garantimos que seja inteiro
-    if (data.balance !== undefined) {
-      data.balance = Math.ceil(data.balance);
+  const handleUpdateUser = async (uId: string, data: any) => {
+    const cleanData = { ...data };
+    if ('balance' in cleanData && typeof cleanData.balance === 'number') {
+      cleanData.balance = Math.ceil(cleanData.balance);
     }
-    await updateDoc(doc(db, "members", uId), data);
+    // setDoc com merge: true garante que salve mesmo que o registro esteja incompleto
+    await setDoc(doc(db, "members", uId), cleanData, { merge: true });
+  };
+
+  const handleSaveAvatar = async () => {
+    if (user && tempAvatar) {
+      setIsSavingAvatar(true);
+      try {
+        const compressed = await compressImage(tempAvatar);
+        await handleUpdateUser(user.id, { avatar: compressed });
+        setTempAvatar(null);
+        alert("Foto de perfil salva permanentemente!");
+      } catch (err: any) {
+        alert("Erro ao salvar foto: " + err.message);
+      } finally {
+        setIsSavingAvatar(false);
+      }
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('mectria_user_email');
+    setUser(null);
+    setTempAvatar(null);
   };
 
   const handleAddMember = async (e: React.FormEvent) => {
@@ -283,11 +390,19 @@ export default function App() {
       const batch = writeBatch(db);
       let count = 0;
       data.forEach(d => {
-        const member = members.find(m => m.name.toLowerCase().includes(d.user.toLowerCase()));
+        const normalizedDUser = normalizeStr(d.user);
+        const member = members.find(m => 
+          normalizeStr(m.clockifyId).includes(normalizedDUser) || 
+          normalizeStr(m.name).includes(normalizedDUser) ||
+          normalizedDUser.includes(normalizeStr(m.clockifyId)) ||
+          normalizedDUser.includes(normalizeStr(m.name))
+        );
+        
         if (member) {
-          // Os tokens da IA já devem vir inteiros, mas garantimos aqui novamente
+          const currentBal = formatBalance(member.balance);
           const tokensToAdd = Math.ceil(d.tokens);
-          batch.update(doc(db, "members", member.id), { balance: increment(tokensToAdd) });
+          const newBalance = currentBal + tokensToAdd;
+          batch.update(doc(db, "members", member.id), { balance: newBalance });
           count++;
         }
       });
@@ -312,11 +427,11 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, callback: (base64: string) => void) => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, callback: (res: any) => void) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => callback(reader.result as string);
+      reader.onloadend = () => callback(reader.result);
       reader.readAsDataURL(file);
     }
   };
@@ -327,7 +442,10 @@ export default function App() {
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-white"><div className="w-8 h-8 border-4 border-[#8B0000] border-t-transparent rounded-full animate-spin"></div></div>;
-  if (!user) return <Login members={members} onLogin={setUser} settings={settings} />;
+  if (!user) return <Login members={members} onLogin={(u) => { 
+    localStorage.setItem('mectria_user_email', u.email);
+    setUser(u); 
+  }} settings={settings} />;
 
   const isMemberOfMonth = user.isMemberOfMonth;
 
@@ -381,7 +499,7 @@ export default function App() {
                <div className="bg-white/10 backdrop-blur-md rounded-[2.5rem] p-10 flex flex-col items-center justify-center border border-white/10 z-10 min-w-[240px] shadow-inner text-center">
                  <span className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-2">Seus Tokens</span>
                  <div className="flex items-center gap-3">
-                   <span className="text-6xl font-black tabular-nums">{Math.floor(user.balance)}</span>
+                   <span className="text-6xl font-black tabular-nums">{formatBalance(user.balance)}</span>
                    <span className="text-sm font-bold opacity-80">TK</span>
                  </div>
                </div>
@@ -402,7 +520,7 @@ export default function App() {
                     <h3 className="text-sm font-black text-gray-800 line-clamp-1 uppercase">{p.name}</h3>
                     <p className="text-xs text-[#8B0000] font-black mt-1">● {p.price} tokens</p>
                   </div>
-                  <Button onClick={() => handleBuy(p)} disabled={Math.floor(user.balance) < p.price} className="w-full mt-auto py-3">RESGATAR</Button>
+                  <Button onClick={() => handleBuy(p)} disabled={formatBalance(user.balance) < p.price} className="w-full mt-auto py-3">RESGATAR</Button>
                 </div>
               ))}
             </div>
@@ -414,25 +532,36 @@ export default function App() {
             <div className={`rounded-[3.5rem] p-12 text-center relative overflow-hidden shadow-lg bg-white ${isMemberOfMonth ? 'legendary-card text-white' : ''}`}>
                {isMemberOfMonth && <LegendaryEmbers />}
                <h2 className={`text-xs font-black uppercase tracking-[0.4em] ${isMemberOfMonth ? 'text-white/60' : 'text-gray-400'} mb-10 z-10 relative`}>Meu Perfil</h2>
+               
                <div className="relative inline-block mb-6 group z-10">
-                  <img src={user.avatar} className={`w-40 h-40 rounded-[2.5rem] mx-auto border-4 border-white shadow-xl object-cover ${isMemberOfMonth ? 'legendary-avatar' : ''}`} alt="Avatar" />
+                  <img src={tempAvatar || user.avatar} className={`w-40 h-40 rounded-[2.5rem] mx-auto border-4 border-white shadow-xl object-cover ${isMemberOfMonth ? 'legendary-avatar' : ''}`} alt="Avatar" />
                   <label className="absolute inset-0 bg-black/40 rounded-[2.5rem] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
                     <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                    <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (base64) => handleUpdateUser(user.id, { avatar: base64 }))} />
+                    <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (res) => setTempAvatar(res))} />
                   </label>
                </div>
+
+               {tempAvatar && (
+                 <div className="z-10 relative mb-8 flex justify-center gap-4 animate-fade-in">
+                    <Button variant="success" onClick={handleSaveAvatar} disabled={isSavingAvatar} className="px-10 py-3 shadow-lg">
+                      {isSavingAvatar ? "SALVANDO..." : "SALVAR FOTO PERMANENTE"}
+                    </Button>
+                    <Button variant="outline" onClick={() => setTempAvatar(null)} disabled={isSavingAvatar} className="px-10 py-3">CANCELAR</Button>
+                 </div>
+               )}
+
                <h3 className={`text-4xl font-black tracking-tight ${isMemberOfMonth ? 'text-white' : 'text-gray-900'} relative z-10`}>{user.name}</h3>
                <p className={`text-[10px] font-black uppercase tracking-[0.3em] mt-2 opacity-60 relative z-10`}>{user.email}</p>
                <div className={`mt-10 p-10 rounded-3xl flex items-center justify-between z-10 relative ${isMemberOfMonth ? 'bg-white/10' : 'bg-gray-50'}`}>
                   <div className="text-left">
                     <p className={`text-[10px] font-black uppercase ${isMemberOfMonth ? 'text-white/50' : 'text-gray-400'}`}>Saldo Atual</p>
-                    <p className={`text-4xl font-black ${isMemberOfMonth ? 'text-white' : 'text-gray-800'}`}>{Math.floor(user.balance)} <span className="text-sm">TK</span></p>
+                    <p className={`text-4xl font-black ${isMemberOfMonth ? 'text-white' : 'text-gray-800'}`}>{formatBalance(user.balance)} <span className="text-sm">TK</span></p>
                   </div>
                   <div className={`p-4 rounded-2xl ${isMemberOfMonth ? 'bg-white text-orange-600' : 'bg-red-50 text-[#8B0000]'}`}>
                     <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z"/><path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd"/></svg>
                   </div>
                </div>
-               <Button variant="outline" className={`w-full mt-12 py-5 border-2 rounded-2xl ${isMemberOfMonth ? 'border-white text-white hover:bg-white/10' : ''}`} onClick={() => setUser(null)}>SAIR DA CONTA</Button>
+               <Button variant="outline" className={`w-full mt-12 py-5 border-2 rounded-2xl ${isMemberOfMonth ? 'border-white text-white hover:bg-white/10' : ''}`} onClick={handleLogout}>SAIR DA CONTA</Button>
             </div>
           </div>
         )}
@@ -441,7 +570,7 @@ export default function App() {
           <div className="bg-white rounded-[3rem] shadow-sm overflow-hidden min-h-[600px] flex flex-col border border-gray-100 animate-fade-in">
             <div className="px-10 py-8 border-b border-gray-100 bg-gray-50/20 flex justify-between items-center">
                <h2 className="text-xl font-black uppercase tracking-tight text-gray-900">Painel de <span className="text-[#8B0000]">Gestão</span></h2>
-               <Button variant="info" onClick={() => setIsImportModalOpen(true)}>IMPORTAR CLOCKIFY</Button>
+               <Button variant="info" onClick={() => setIsImportModalOpen(true)}>IMPORTAR PDF CLOCKIFY</Button>
             </div>
             <div className="flex px-10 border-b border-gray-100 bg-white overflow-x-auto no-scrollbar">
                {[
@@ -465,9 +594,11 @@ export default function App() {
                 <div className="space-y-6">
                   <div className="flex items-center justify-between">
                     <h3 className="text-xs font-black uppercase text-gray-400">Controle de Membros</h3>
-                    <Button onClick={() => setIsAddingMember(!isAddingMember)} variant={isAddingMember ? "danger" : "primary"}>
-                      {isAddingMember ? "CANCELAR" : "+ NOVO MEMBRO"}
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button onClick={() => setIsAddingMember(!isAddingMember)} variant={isAddingMember ? "danger" : "primary"}>
+                        {isAddingMember ? "CANCELAR" : "+ NOVO MEMBRO"}
+                      </Button>
+                    </div>
                   </div>
                   {isAddingMember && (
                     <form onSubmit={handleAddMember} className="bg-gray-50 border p-8 rounded-[2rem] space-y-4 animate-fade-in">
@@ -507,23 +638,33 @@ export default function App() {
                          <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-gray-50">
                             <div>
                                <p className="text-[9px] font-black text-gray-400 uppercase">Saldo</p>
-                               <p className="text-xl font-black text-gray-900">{Math.floor(m.balance)} TK</p>
+                               <p className="text-xl font-black text-gray-900">{formatBalance(m.balance)} TK</p>
                             </div>
                             <div className="flex items-center gap-1.5">
                                  <input type="number" step="1" value={adjAmounts[m.id] || ''} onChange={(e) => setAdjAmounts({...adjAmounts, [m.id]: e.target.value})}
-                                   className="w-14 bg-gray-50 border rounded-lg px-2 py-1.5 text-xs font-black outline-none" />
+                                   className="w-14 bg-gray-50 border rounded-lg px-2 py-1.5 text-xs font-black outline-none text-center" />
                                  <button onClick={() => { 
-                                   const val = Math.ceil(Math.abs(Number(adjAmounts[m.id]))); 
-                                   if (val) handleUpdateUser(m.id, { balance: increment(-val) }); 
+                                   const rawVal = Number(adjAmounts[m.id]);
+                                   if (isNaN(rawVal)) return;
+                                   const val = Math.ceil(Math.abs(rawVal)); 
+                                   if (val) {
+                                      const currentBal = formatBalance(m.balance);
+                                      handleUpdateUser(m.id, { balance: currentBal - val }); 
+                                   }
                                    setAdjAmounts({...adjAmounts, [m.id]: ''}); 
                                  }}
-                                   className="w-8 h-8 rounded-lg bg-red-50 text-red-600 font-black">-</button>
+                                   className="w-8 h-8 rounded-lg bg-red-50 text-red-600 font-black hover:bg-red-100 transition-colors">-</button>
                                  <button onClick={() => { 
-                                   const val = Math.ceil(Math.abs(Number(adjAmounts[m.id]))); 
-                                   if (val) handleUpdateUser(m.id, { balance: increment(val) }); 
+                                   const rawVal = Number(adjAmounts[m.id]);
+                                   if (isNaN(rawVal)) return;
+                                   const val = Math.ceil(Math.abs(rawVal)); 
+                                   if (val) {
+                                      const currentBal = formatBalance(m.balance);
+                                      handleUpdateUser(m.id, { balance: currentBal + val });
+                                   }
                                    setAdjAmounts({...adjAmounts, [m.id]: ''}); 
                                  }}
-                                   className="w-8 h-8 rounded-lg bg-green-50 text-green-600 font-black">+</button>
+                                   className="w-8 h-8 rounded-lg bg-green-50 text-green-600 font-black hover:bg-green-100 transition-colors">+</button>
                             </div>
                          </div>
                       </div>
@@ -544,9 +685,13 @@ export default function App() {
                       </div>
                       <div className="flex gap-2">
                          <Button onClick={async () => {
+                           const member = members.find(m => m.id === o.userId);
                            const batch = writeBatch(db);
                            batch.update(doc(db, "orders", o.id), { status: OrderStatus.REJECTED });
-                           batch.update(doc(db, "members", o.userId), { balance: increment(o.price) });
+                           if (member) {
+                             const newBalance = formatBalance(member.balance) + o.price;
+                             batch.update(doc(db, "members", o.userId), { balance: newBalance });
+                           }
                            await batch.commit();
                          }} variant="danger">RECUSAR</Button>
                          <Button onClick={() => updateDoc(doc(db, "orders", o.id), { status: OrderStatus.DELIVERED })} variant="success">ENTREGAR</Button>
@@ -580,7 +725,7 @@ export default function App() {
                            )}
                            <label className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
                              <span className="text-white text-[10px] font-black uppercase">Alterar Foto</span>
-                             <input type="file" className="hidden" accept="image/png, image/jpeg" onChange={(e) => handleFileUpload(e, (base64) => setProductForm({...productForm, image: base64}))} />
+                             <input type="file" className="hidden" accept="image/png, image/jpeg" onChange={(e) => handleFileUpload(e, (res) => setProductForm({...productForm, image: res}))} />
                            </label>
                         </div>
                         <div className="flex-1 space-y-4">
@@ -627,7 +772,7 @@ export default function App() {
                            <p className="text-xs text-gray-500">Esta logo aparecerá na tela de entrada do sistema.</p>
                            <label className="inline-block bg-[#8B0000] text-white px-6 py-3 rounded-xl font-bold text-xs cursor-pointer hover:bg-red-800">
                               ALTERAR LOGO LOGIN
-                              <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (base64) => updateSettings({ loginLogo: base64 }))} />
+                              <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (res) => updateSettings({ loginLogo: res }))} />
                            </label>
                         </div>
                      </div>
@@ -643,7 +788,7 @@ export default function App() {
                            <p className="text-xs text-gray-500">Esta logo aparecerá no topo da loja.</p>
                            <label className="inline-block bg-[#8B0000] text-white px-6 py-3 rounded-xl font-bold text-xs cursor-pointer hover:bg-red-800">
                               ALTERAR LOGO LOJA
-                              <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (base64) => updateSettings({ storeLogo: base64 }))} />
+                              <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, (res) => updateSettings({ storeLogo: res }))} />
                            </label>
                         </div>
                      </div>
@@ -682,7 +827,7 @@ export default function App() {
             className={`nav-item ${view === 'admin' ? 'active' : 'inactive'}`}
           >
             <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>
+              <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>
             </svg>
             <span className="nav-label">ADMIN</span>
           </div>
@@ -703,7 +848,7 @@ function Login({ members, onLogin, settings }: { members: User[], onLogin: (u: U
   const [email, setEmail] = useState('');
   return (
     <div className="min-h-screen bg-[#f3f4f6] flex items-center justify-center p-6">
-      <div className="w-full max-w-sm bg-white p-14 rounded-[4rem] card-shadow text-center flex flex-col items-center gap-10 border border-white">
+      <div className="w-full max-sm bg-white p-14 rounded-[4rem] card-shadow text-center flex flex-col items-center gap-10 border border-white">
         <div className="w-24 h-24 bg-gray-50 rounded-[2.5rem] flex items-center justify-center border border-gray-100 p-2 shadow-inner">
            {settings.loginLogo ? <img src={settings.loginLogo} className="max-w-[80%]" alt="Marca" /> : <GearLogo />}
         </div>
